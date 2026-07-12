@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MDBOOK_VERSION="0.5.4"
+cd "$ROOT"
+
+if [[ -n "${MDBOOK_BIN:-}" ]]; then
+  MDBOOK="$MDBOOK_BIN"
+else
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64)
+      TARGET="x86_64-unknown-linux-gnu"
+      ARCHIVE_SHA256="3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7"
+      BINARY_SHA256="dc9020903f60cf632c0cc01bf8c12b57237649c2ab64c7a85a60e12103e356ce"
+      ;;
+    Linux-aarch64)
+      TARGET="aarch64-unknown-linux-musl"
+      ARCHIVE_SHA256="753e5c5c363ee8a56972344dcf91466f005a51db84a7aeffe427ae3ef83d6d44"
+      BINARY_SHA256="c3526481bf31515c75019ddeb2ac49bec1ed24b53f1b4d7c169e140f5d770c92"
+      ;;
+    *)
+      echo "不支援自動安裝的平台：$(uname -s)-$(uname -m)" >&2
+      echo "請安裝 mdBook $MDBOOK_VERSION，並以 MDBOOK_BIN 指定 executable。" >&2
+      exit 2
+      ;;
+  esac
+
+  TOOL_DIR="$ROOT/.cache/book-tools/mdbook-v${MDBOOK_VERSION}-${TARGET}"
+  MDBOOK="$TOOL_DIR/mdbook"
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "缺少工具完整性檢查所需命令：sha256sum" >&2
+    exit 2
+  fi
+  if [[ ! -x "$MDBOOK" ]]; then
+    for command in curl sha256sum tar install; do
+      if ! command -v "$command" >/dev/null 2>&1; then
+        echo "缺少自動安裝所需命令：$command" >&2
+        exit 2
+      fi
+    done
+
+    TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/emmet-book-tools.XXXXXX")"
+    trap 'rm -rf "$TEMP_DIR"' EXIT
+    ARCHIVE="mdbook-v${MDBOOK_VERSION}-${TARGET}.tar.gz"
+    URL="https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/${ARCHIVE}"
+    echo "下載固定版本 mdBook v${MDBOOK_VERSION} (${TARGET})"
+    curl --fail --location --silent --show-error "$URL" --output "$TEMP_DIR/$ARCHIVE"
+    if ! printf '%s  %s\n' "$ARCHIVE_SHA256" "$TEMP_DIR/$ARCHIVE" | sha256sum --check --status; then
+      echo "TOOL_ARCHIVE_CHECKSUM mdBook archive SHA-256 不符" >&2
+      exit 2
+    fi
+    tar --extract --gzip --file "$TEMP_DIR/$ARCHIVE" --directory "$TEMP_DIR" mdbook
+    mkdir -p "$TOOL_DIR"
+    install -m 0755 "$TEMP_DIR/mdbook" "$MDBOOK"
+  fi
+  if ! printf '%s  %s\n' "$BINARY_SHA256" "$MDBOOK" | sha256sum --check --status; then
+    echo "TOOL_CHECKSUM cached mdBook SHA-256 不符；請移除 $TOOL_DIR 後重試" >&2
+    exit 2
+  fi
+fi
+
+ACTUAL_VERSION="$("$MDBOOK" --version 2>/dev/null || true)"
+if [[ "$ACTUAL_VERSION" != "mdbook v$MDBOOK_VERSION" && "$ACTUAL_VERSION" != "mdbook $MDBOOK_VERSION" ]]; then
+  echo "TOOL_VERSION mdBook 必須是 $MDBOOK_VERSION，實際為 ${ACTUAL_VERSION:-<無法執行>}" >&2
+  exit 1
+fi
+
+BOOK_CHECK_TEST_MDBOOK="$MDBOOK" \
+  python3 -m unittest discover -s "$ROOT/tests" -p 'test_book_check.py' -v
+
+python3 -u "$ROOT/scripts/book_check.py" --root "$ROOT" --mdbook "$MDBOOK"

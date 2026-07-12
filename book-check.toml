@@ -1,0 +1,7 @@
+[metadata]
+# 所有正文都需要章首 metadata；具操作性的 front matter 必須逐一明列。
+# 非操作型 front matter（目前只有序章）不應為了通過檢查而虛構配套基線。
+required = [
+  "chapters/*.md",
+  "front-matter/setup.md",
+]

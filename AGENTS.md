@@ -13,7 +13,7 @@
   權威來源。
 - `docs/curriculum.md`：全書教育目標、章序、寫作批次、gate 與系統 Phase 對應。
 - `docs/authoring-guide.md`：寫作、版本、驗證與章節模板規範。
-- `manuscript/front-matter/preface.md`：讀者面的七步證據閉環與內容狀態正本。
+- `manuscript/preface.md`：讀者面的七步證據閉環與內容狀態正本。
 - `manuscript/SUMMARY.md`：出版與閱讀導航，不是寫作進度來源。
 - GitHub Milestones／Issues：即時工作狀態；不能放寬 curriculum 或本文件的 gate。
 - `../emmet-qt-bt1` 已發布 tag 與其權威設計文件：系統行為的事實來源。

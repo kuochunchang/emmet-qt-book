@@ -14,9 +14,13 @@ __pycache__/
 .venv/
 
 # 書籍建置輸出
-book/
-dist/
-site/
+/book/
+/dist/
+/site/
+
+# 固定版本的本機書籍工具
+/.cache/book-tools/
+/.cache/book-build/
 
 # 本機設定與秘密
 .env
