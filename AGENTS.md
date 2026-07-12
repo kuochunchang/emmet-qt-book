@@ -1,0 +1,137 @@
+# Repository Agent Instructions
+
+本文件適用於整個 `emmet-qt-book` repository。它的目的不是規定書中知識內容，
+而是防止作者或 AI agent 跳過寫作 gate、引用未發布能力，或把未驗證結果寫成
+可操作教材。
+
+## 文件權責與衝突處理
+
+- `AGENTS.md`：目前允許啟動的工作、禁止範圍與 agent 工作流程。
+- `docs/curriculum.md`：全書教育目標、章序、寫作批次、gate 與系統 Phase 對應。
+- `docs/authoring-guide.md`：寫作、版本、驗證與章節模板規範。
+- `manuscript/front-matter/preface.md`：讀者面的七步證據閉環與內容狀態正本。
+- `manuscript/SUMMARY.md`：出版與閱讀導航，不是寫作進度來源。
+- GitHub Milestones／Issues：即時工作狀態；不能放寬 curriculum 或本文件的 gate。
+- `../emmet-qt-bt1` 已發布 tag 與其權威設計文件：系統行為的事實來源。
+
+發生衝突時採較嚴格限制。若 AGENTS、curriculum 與 GitHub live state 不一致，先
+停止新章擴寫並修正治理資料；不得自行挑選最方便的一份繼續。
+
+## 目前 active gate
+
+> 寫作批次：W1
+>
+> Active gate：`W1-G0`
+>
+> 最後核准日期：2026-07-12
+>
+> 核准來源：使用者明確指示；追蹤 Issue #35
+>
+> 詳細進入／退出條件：`docs/curriculum.md`「實施順序與啟動門檻」
+
+只有 default branch `main` 已合併的宣告能啟用 gate；feature branch、舊分支或
+未合併 PR 中的 gate 變更一律視為提案。
+
+`W1-G0` 目前只允許：
+
+- Issue #8：先選定出版工具鏈並建立本機 book check。
+- Issue #7：#8 的 check 可用前只設計台帳 schema；之後建立格式、位置與使用
+  方式，並保持開啟到 W1 final。
+- 為解除上述阻擋所必須、且已有 GitHub Issue 追蹤的治理或缺陷修正。
+- 使用者核准且由 Meta Issue #1 追蹤的 gate-transition 工作。
+
+`W1-G0` 完成前禁止：
+
+- 啟動 Issue #2–#5 的新章撰寫或實質擴寫。
+- 脫離 active 正文一次預寫 Issue #6 的全部附錄。
+- 撰寫第 4、21–50 章的讀者操作內容。
+- 從配套系統開發分支取得範例、輸出或完成宣稱。
+
+Issue #35 是建立本 guard 的一次性治理工作；合併後即回到上述 `W1-G0` 限制。
+
+## 後續 gate 概要
+
+W1 固定順序為：
+
+```text
+W1-G0  #8 ＋ #7 台帳骨架
+  → W1-G1  #2（第 1–3 章）
+  → W1-G2  #3（第 5–9 章）
+  → W1-G3  #4（第 10–15 章）
+  → W1-G4  #5（第 16–20 章）
+  → W1-final  #6 ＋ #7 最終驗收
+```
+
+Issue #6 只能隨目前 active gate 的正文補寫相關附錄。Issue #7 在 G0 建立骨架、
+G1–G4 隨章更新，並保持開啟到 `W1-final`。完整退出條件以 curriculum 為準，
+不能只看到前一 Issue 有活動就假設下一 gate 已啟動。
+
+配套系統依賴：
+
+- W2／第 21–25 章：等待 `emmet-qt-bt1` Phase 4 正式 release 且 gate 通過。
+- W3／第 4、26 章：等待 Phase 4.5 正式 Foundation 入口 release 且 gate 通過。
+- W4／第 27–36 章：等待 Phase 5 Backtest／MCP 正式 release 且 gate 通過。
+- W5／第 37–38 章：等待 Phase 6 replay／fault 正式 release 且 gate 通過。
+- W6／第 39–42 章：等待 Phase 7 Paper／Testnet 正式 release 且 gate 通過。
+- W7／第 43–44 章：等待 Phase 8 正式 release 且 gate 通過，以及 Phase 9 驗收。
+- W8／第 45–50 章：等待前序案例與驗證證據形成，再依核准 gate 啟動。
+
+等待中的內容只能累積作者用大綱、問題與證據筆記，不得建立讀者章稿或假想
+操作路徑。
+
+## 開工前必查
+
+每次開始工作都必須：
+
+1. 讀取本文件、curriculum 的 active gate、authoring guide 與對應 GitHub Issue。
+2. 確認 Issue 屬於目前 gate；若不屬於，停止並說明阻擋。
+3. 檢查工作樹並保留使用者既有變更。新的寫入任務若尚未位於對應分支，才從
+   最新 `main` 建立聚焦分支；審查或續作既有任務留在其目標分支。
+4. 若內容涉及配套系統，使用 `manuscript/front-matter/setup.md` 的隔離 worktree，
+   核對 `tag@commit`、乾淨狀態與 lockfile；不得切換現行開發工作樹。
+5. 讀取配套系統相符的權威設計、發布證據與既有測試；設計或開發分支不能支持
+   「可操作」宣稱。
+
+## 寫作與驗證流程
+
+- 一個 PR 原則上處理一章或高度相關的兩章；GitHub bundle Issue 可由多個 PR 完成。
+- 章稿遵循序章的七步證據閉環，留下明確的讀者專業成果。
+- 章首使用權威內容狀態；操作章記錄精確 `tag@commit` 與最後驗證日期。
+- 所有命令、數值與輸出必須實際重現；未執行不得宣稱通過。
+- 會計數字使用字串構造的 `Decimal`；時間與因果語義對照配套系統設計。
+- 外部網路案例與固定離線樣本分開；mock 不得冒充真實下載或外部 smoke。
+- 不存放 API key、帳戶資料、private 輸出或其他秘密；練習預設不使用真實資金。
+- 交易所、API、費率、法律、稅務與安全資訊使用第一手來源，發布前重新查證。
+- 發現配套系統缺陷或語義缺口時，保存最小重現與 oracle，轉到
+  `emmet-qt-bt1` 追蹤；不得在書稿複製第二套邏輯掩蓋問題。
+
+## PR 與完成定義
+
+- 不直接推送 `main`；使用聚焦分支與 PR。
+- PR 以 `Refs #N` 關聯 bundle／meta Issues；最後完成該 Issue 的 PR 才用
+  `Closes #N`。
+- 未經使用者明確要求，不自行合併 PR、建立 release 或關閉仍有工作項目的 Issue。
+- GitHub comment 於文末註記撰寫 agent，例如 `— Codex`。
+
+章節或基礎設施工作完成前，至少確認：
+
+- 符合目前 active gate，沒有夾帶後續章節。
+- 讀者面與作者面文件邊界正確，`SUMMARY.md` 導航同步。
+- 狀態、版本、命令、輸出、作者驗證紀錄與專業成果完整。
+- book check、連結、格式及與任務相關的驗證通過；在 Issue #8 建立 check 以前，
+  #8 本身以它新增的 bootstrap／self-check 證據取代此要求。
+- 審查 finding 已處理或以明確 Issue 追蹤，不以「之後再修」冒充完成。
+
+## Gate 升級
+
+只有目前 gate 的退出條件已在 `main` 留下證據，且使用者核准前進時，才能升級。
+Gate transition 固定依序執行：
+
+1. 使用者明確核准前進，並由 GitHub Issue 追蹤 transition。
+2. 以同一個 PR 更新 `docs/curriculum.md` 的 active gate／完成證據，以及本文件的
+   active gate／允許與禁止範圍。
+3. PR 合併至 `main` 後，立即更新 GitHub Meta Issue #1 的目前 gate、完成項、
+   下一步與 merge SHA。
+4. 核對 `main` 兩份文件與 Meta Issue 三者一致；此時新 gate 才正式生效。
+
+只更新 feature branch、GitHub label、Milestone 或對話說明，不構成 gate 升級。
