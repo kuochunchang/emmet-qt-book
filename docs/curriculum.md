@@ -84,6 +84,12 @@
 本篇回答「我要成為什麼樣的交易員，以及系統在訓練中扮演什麼角色」。讀者先
 看到完整旅程與第一份成果，再進入市場和工程細節。
 
+## 實作準備（不編章號）　建立版本固定的配套環境
+
+在任何操作章之前安裝 Git、uv 與 Python 3.12，並以獨立 worktree 固定配套
+`tag@commit`。這項準備屬 W1，不依賴 Phase 4.5，也不得切換正在開發的配套
+工作樹。
+
 ## 第 1 章　專業不是預測準，而是能對決定負責
 
 區分投機、系統化交易與專業流程；建立資料、假設、執行、會計、風控和復盤的
@@ -102,9 +108,9 @@
 
 ## 第 4 章　第一個受控實驗：先取得一份可以解釋的結果
 
-建立 Python 3.12／uv 環境，使用固定真實樣本和正式 Foundation 入口完成第一個
+使用實作準備建立的版本化環境、固定真實樣本和正式 Foundation 入口完成第一個
 引導實驗。讀者先預測、再執行、閱讀資料 readiness、事件時間軸和最終帳戶，
-留下第一份證據日誌。本章待 Phase 4.5 正式入口發布後定稿。
+留下第一份證據日誌。本章實驗本體待 Phase 4.5 正式入口發布後定稿。
 
 ### 篇末成果
 
@@ -576,7 +582,7 @@ release 和跨版本重驗。
 
 | 寫作批次 | 可先完成範圍 | 系統依據 |
 |---|---|---|
-| W1 | 第 1–3、5–20 章及基礎附錄 | 已發布 v0.3.0＋穩定市場知識 |
+| W1 | 實作準備、第 1–3、5–20 章及基礎附錄 | 已發布 v0.3.0＋穩定市場知識 |
 | W2 | 第 21–25 章 | Phase 4 發布與 gate 後 |
 | W3 | 第 4、26 章 | Phase 4.5 正式 Foundation 入口發布後 |
 | W4 | 第 27–36 章 | Phase 5 Backtest／MCP 發布後 |
@@ -598,7 +604,7 @@ release 和跨版本重驗。
 | 型別、Clock、規則與限頻 | `quant.common.models/clock/rules/ratelimit` | 第 2–4 篇 | `v0.3.0` 已發布 |
 | 歷史資料、驗證與 PIT universe | `quant.data`、`quant-data` | 第 3 篇 | `v0.3.0` 已發布 |
 | 多流、撮合、執行與唯一帳本 | `quant.common.datasource/fill/execution/engine.accounting` | 第 4 篇 | `v0.3.0` 已發布 |
-| Engine、runner、多腿、組合風控與指標 | `quant.common.engine/runner/indicators/strategy_api` | 第 5 篇 | Phase 4 實作中，尚無正式入口 |
+| Engine、runner、多腿、組合風控與指標 | `quant.common.engine`、`quant.common.runner`、`quant.common.indicators`、`quant.strategy_api` | 第 5 篇 | Phase 4 實作中，尚無正式入口 |
 | Foundation 正式操作入口 | Phase 4.5 composition | 第 1、5 篇 | 尚未開放 |
 | Backtest、報告、Alpha 發現與 MCP | `quant.backtest/mcp` | 第 6–7 篇 | Phase 5 規劃 |
 | Golden replay 與故障注入框架 | Phase 6 | 第 7 篇 | 尚未開放 |
@@ -615,6 +621,6 @@ release 和跨版本重驗。
 - [x] 核准十篇、五十章、三個案例與延伸附錄架構。
 - [x] 建立寫作規範、章節模板與版本同步方式。
 - [ ] 決定出版工具鏈與輸出格式。
-- [ ] 完成 W1：第 1–3、5–20 章及基礎附錄。
+- [ ] 完成 W1：實作準備、第 1–3、5–20 章及基礎附錄。
 - [ ] 隨 Phase 4–9 發布完成 W2–W7，逐一保留操作證據。
 - [ ] 完成第 45–50 章、試讀、技術校對與全書版本重驗。

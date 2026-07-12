@@ -1,6 +1,7 @@
 # 全書目錄
 
 - [怎麼使用這本書](front-matter/preface.md)
+- [實作準備：建立版本固定的配套環境](front-matter/setup.md)
 
 ## 第一篇　專業從證據開始
 

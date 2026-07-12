@@ -17,8 +17,8 @@
 
 ## 目前基線
 
-本書依 `emmet-qt-bt1` 的權威設計文件撰寫。已發布基線為 `v0.3.0`，Phase 1–3
-已完成，Phase 4 正在開發；資料管線、基礎模型、撮合、
+本書依 `emmet-qt-bt1` 的權威設計文件撰寫。第一批操作基線為
+`v0.3.0@c999965e5cc9`，Phase 1–3 已完成，Phase 4 正在開發；資料管線、基礎模型、撮合、
 執行與會計已有實作，完整引擎、Backtest Server、MCP、Paper 與 Live 則須依
 各 Phase 實際完成狀態更新書稿。
 
@@ -29,13 +29,15 @@
 
 - [全書目錄](manuscript/SUMMARY.md)
 - [序章：怎麼使用這本書](manuscript/front-matter/preface.md)
+- [實作準備：建立版本固定的配套環境](manuscript/front-matter/setup.md)
 - [權威課程大綱](docs/curriculum.md)
 - [寫作指南與章節模板](docs/authoring-guide.md)
 
 ## 建議閱讀方式
 
-每章依「問題情境 → 必要概念 → 系統對照 → 動手操作 → 驗證結果 → 常見錯誤」
-展開。第一次閱讀可依序完成主線；已有交易經驗者可由
+全書使用課程大綱定義的[七步證據閉環](docs/curriculum.md#每章固定教學閉環)，
+把執行前預測、系統驗證、專業決定與系統回饋連成同一條學習路徑。第一次閱讀
+可依序完成主線；已有交易經驗者可由
 [課程大綱的能力地圖](docs/curriculum.md#配套系統能力地圖)直接跳到需要的主題。
 
 ## Repository 結構
@@ -47,7 +49,7 @@ docs/
 └── authoring-guide.md    寫作、版本、驗證規範與章節模板
 manuscript/
 ├── SUMMARY.md            讀者閱讀順序
-├── front-matter/         序言與導讀
+├── front-matter/         序言、導讀與版本固定的實作準備
 └── chapters/             正文章節
 ```
 
