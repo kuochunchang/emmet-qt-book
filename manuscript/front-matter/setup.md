@@ -1,5 +1,9 @@
 # 實作準備：建立版本固定的配套環境
 
+> 配套基線：`emmet-qt-bt1 v0.3.0@c999965e5cc9`
+> 內容狀態：可操作
+> 最後驗證日期：2026-07-12
+
 這份準備不編入正文章號，也不依賴尚未完成的 Foundation 入口。凡是需要執行
 `emmet-qt-bt1` 指令的章節，都先使用這裡建立的隔離環境，避免正在開發的系統
 工作樹悄悄改變書中結果。
@@ -122,7 +126,8 @@ uv run pytest tests/unit/test_models_orders.py -q
 | 找不到 `uv` | `uv --version` | 回到官方安裝文件，不要跳過 locked sync |
 | 找不到 Python 3.12 | `uv python list` | 執行 `uv python install 3.12` |
 | worktree 目錄已存在 | `git -C ../emmet-qt-bt1 worktree list` | 核對既有路徑與 SHA，不覆蓋、不刪除未知工作 |
-| HEAD 與章首不同 | `git rev-parse HEAD` | 停止操作，建立正確版本的另一個 worktree |
+| tag 解析成不同 SHA | `git -C ../emmet-qt-bt1 rev-parse 'v0.3.0^{commit}'` | 停止並回報；tag 可能已被移動，不繼續建立 worktree |
+| HEAD 與章首不同 | `git -C "$EMMET_QT_BT1_DIR" rev-parse HEAD` | 停止操作，建立正確版本的另一個 worktree |
 | `status --short` 有輸出 | 檢查變更來源 | 不把該結果當成本書基線證據 |
 | dependency sync 失敗 | 網路、lockfile 與完整錯誤 | 保留錯誤訊息，不改 lockfile 規避問題 |
 
@@ -155,3 +160,22 @@ lock check／sync 結果：
 smoke test 結果：32 passed
 檢查日期：
 ```
+
+## 作者驗證紀錄
+
+- 驗證對象：tag、隔離 worktree、locked environment、Python 與 smoke test 全流程
+- 對照 tag／commit：`v0.3.0@c999965e5cc923281541409cda9502beb93b8a60`
+- 驗證環境：Linux／Bash、Git 2.43.0、uv 0.10.4、Python 3.12.3
+- 驗證命令：
+  - `git -C ../emmet-qt-bt1 rev-parse 'v0.3.0^{commit}'`
+  - `git -C ../emmet-qt-bt1 worktree add --detach ../emmet-qt-bt1-v0.3.0 c999965e5cc923281541409cda9502beb93b8a60`
+  - `export EMMET_QT_BT1_DIR="$(cd ../emmet-qt-bt1-v0.3.0 && pwd)"`
+  - `git -C "$EMMET_QT_BT1_DIR" rev-parse HEAD`
+  - `git -C "$EMMET_QT_BT1_DIR" status --short`
+  - `cd "$EMMET_QT_BT1_DIR"`
+  - `uv lock --check`
+  - `uv sync --locked --dev`
+  - `uv run python --version`
+  - `uv run pytest tests/unit/test_models_orders.py -q`
+- 通過結果：tag 與 HEAD 均為固定 SHA；locked sync 成功；`32 passed`
+- 待處理差異：其他作業系統與 shell 尚未列入驗證基線
