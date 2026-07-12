@@ -7,6 +7,10 @@
 ## 文件權責與衝突處理
 
 - `AGENTS.md`：目前允許啟動的工作、禁止範圍與 agent 工作流程。
+- `CLAUDE.md`：Claude Code 相容入口；只匯入 `AGENTS.md`，不得另立或放寬
+  repository 規則。
+- `README.md`：repository 入口與基線摘要；屬衍生導覽，不是 gate 或系統能力的
+  權威來源。
 - `docs/curriculum.md`：全書教育目標、章序、寫作批次、gate 與系統 Phase 對應。
 - `docs/authoring-guide.md`：寫作、版本、驗證與章節模板規範。
 - `manuscript/front-matter/preface.md`：讀者面的七步證據閉環與內容狀態正本。
@@ -16,6 +20,8 @@
 
 發生衝突時採較嚴格限制。若 AGENTS、curriculum 與 GitHub live state 不一致，先
 停止新章擴寫並修正治理資料；不得自行挑選最方便的一份繼續。
+README 若與對應權威來源不一致，以權威來源為準並修正 README；README 本身不能
+改變 gate 或系統能力判定。
 
 ## 目前 active gate
 
@@ -27,6 +33,9 @@
 >
 > 核准來源：使用者明確指示；追蹤 Issue #35
 >
+> 前一 gate 完成證據：不適用（W1 起始 gate；進入證據：#31／PR #32 @
+> `ab149f8`、#33／PR #34 @ `30a9bad`）
+>
 > 詳細進入／退出條件：`docs/curriculum.md`「實施順序與啟動門檻」
 
 只有 default branch `main` 已合併的宣告能啟用 gate；feature branch、舊分支或
@@ -37,8 +46,14 @@
 - Issue #8：先選定出版工具鏈並建立本機 book check。
 - Issue #7：#8 的 check 可用前只設計台帳 schema；之後建立格式、位置與使用
   方式，並保持開啟到 W1 final。
-- 為解除上述阻擋所必須、且已有 GitHub Issue 追蹤的治理或缺陷修正。
+- 經使用者明確核准、已有 GitHub Issue 追蹤且限於最小範圍的兩類修正：
+  - 直接阻擋 Issue #8 或 Issue #7 台帳骨架達成 `W1-G0` 退出條件的缺陷。
+  - 修復 agent guard 未被載入，或 `AGENTS.md`、`docs/curriculum.md` 與 Meta
+    Issue #1 不一致的治理缺陷。
 - 使用者核准且由 Meta Issue #1 追蹤的 gate-transition 工作。
+
+建立或標記 Issue 本身不構成上述修正的授權；例外工作不得新增或實質擴寫正文／
+附錄，也不得取用後續 gate 的能力、範例、輸出或完成證據。
 
 `W1-G0` 完成前禁止：
 
@@ -128,10 +143,11 @@ G1–G4 隨章更新，並保持開啟到 `W1-final`。完整退出條件以 cur
 Gate transition 固定依序執行：
 
 1. 使用者明確核准前進，並由 GitHub Issue 追蹤 transition。
-2. 以同一個 PR 更新 `docs/curriculum.md` 的 active gate／完成證據，以及本文件的
-   active gate／允許與禁止範圍。
-3. PR 合併至 `main` 後，立即更新 GitHub Meta Issue #1 的目前 gate、完成項、
-   下一步與 merge SHA。
+2. 以同一個 PR 更新 `docs/curriculum.md` 的 active gate 與「前一 gate 完成證據」
+   欄位（至少記錄完成 Issue／PR 與 merge SHA），以及本文件的 active gate、證據
+   摘要與允許／禁止範圍。
+3. PR 合併至 `main` 後，立即更新 GitHub Meta Issue #1 的目前 gate、前一 gate
+   完成證據、下一步與本次 transition PR 的 merge SHA。
 4. 核對 `main` 兩份文件與 Meta Issue 三者一致；此時新 gate 才正式生效。
 
 只更新 feature branch、GitHub label、Milestone 或對話說明，不構成 gate 升級。

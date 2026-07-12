@@ -606,9 +606,17 @@ GitHub Issues 記錄即時完成狀態。三者不一致時採較嚴格限制，
 > 最後核准日期：2026-07-12
 >
 > 核准來源：使用者明確指示；追蹤 Issue #35
+>
+> 前一 gate 完成證據：不適用（W1 起始 gate；進入證據：#31／PR #32 @
+> `ab149f8`、#33／PR #34 @ `30a9bad`）
 
 只有 default branch `main` 已合併的 active gate 宣告有效；feature branch、舊分支
 或未合併 PR 中的 gate 文字都只是提案，不能解鎖新工作。
+
+「前一 gate 完成證據」是 gate transition 的固定落點；升級時使用「前一 gate —
+完成 Issue／PR @ merge SHA；詳細驗證：台帳或 Issue」格式。W1-G0 因為是起始
+gate，標示不適用。Meta Issue #1 同步這份證據，並另外記錄 transition PR 的
+merge SHA。
 
 W1 依下列 gate 前進。前一 gate 的退出條件尚未在 `main` 留下可核對證據時，不
 啟動下一 gate。

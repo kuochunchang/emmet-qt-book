@@ -17,10 +17,11 @@
 
 ## 目前基線
 
-本書依 `emmet-qt-bt1` 的權威設計文件撰寫。第一批操作基線為
-`v0.3.0@c999965e5cc9`，Phase 1–3 已完成，Phase 4 正在開發；資料管線、基礎模型、撮合、
-執行與會計已有實作，完整引擎、Backtest Server、MCP、Paper 與 Live 則須依
-各 Phase 實際完成狀態更新書稿。
+本書第一批操作基線固定為 `emmet-qt-bt1`
+`v0.3.0@c999965e5cc923281541409cda9502beb93b8a60`。可操作能力與後續 Phase 狀態以
+[課程大綱的配套系統能力地圖](docs/curriculum.md#配套系統能力地圖)為準；目前允許
+啟動的寫作工作以根目錄 `AGENTS.md` 的 active gate 為準。README 只提供入口摘要，
+不取代這些權威來源。
 
 > 本書是工程與研究教材，不構成投資建議。實盤交易可能損失全部本金；在讀者
 > 完成資料驗證、回測、模擬盤、風控與操作演練前，不引導其投入真實資金。
@@ -43,6 +44,8 @@
 ## Repository 結構
 
 ```text
+AGENTS.md                 Agent 寫作 gate 與工作規則
+CLAUDE.md                 Claude Code 相容入口，匯入 AGENTS.md
 README.md                 專案入口與目前基線
 docs/
 ├── curriculum.md         課程、章序、能力地圖與開發里程碑
@@ -53,5 +56,6 @@ manuscript/
 └── chapters/             正文章節
 ```
 
-課程規劃只在 `docs/curriculum.md` 維護；`SUMMARY.md` 只負責讀者導航，避免出現
-彼此競爭的新舊大綱。
+教育目標、章序與寫作批次由 `docs/curriculum.md` 維護；README 不另行定義 agent
+工作限制，目前限制以 `AGENTS.md` 與 curriculum 的 active gate 為準；`SUMMARY.md`
+只負責讀者導航，避免出現彼此競爭的新舊大綱。
