@@ -52,6 +52,10 @@
 
 目前驗證基線為 Linux／Bash。
 
+執行前必須先依[實作準備](manuscript/front-matter/setup.md)建立配套系統的隔離
+worktree。book check 會對配套 repository 核對驗證台帳的基線與 evidence，找不到
+就以 exit 2 中止——台帳無法離線驗證，因此「跳過」不是一個選項。
+
 命令會以固定版本的 mdBook 建置並檢查書稿；成功後由 `book/index.html` 閱讀 HTML
 版。尚未建置時，可由[全書目錄](manuscript/SUMMARY.md)開啟已有章稿；空 target
 表示該章尚未撰寫。
@@ -66,7 +70,7 @@ AGENTS.md                 Agent 寫作 gate 與工作規則
 CLAUDE.md                 Claude Code 相容入口，匯入 AGENTS.md
 README.md                 專案入口與目前基線
 book.toml                 mdBook 出版設定
-book-check.toml           metadata 與作者驗證台帳設定
+book-check.toml           metadata 適用範圍
 docs/
 ├── curriculum.md         課程、章序、能力地圖與開發里程碑
 ├── authoring-guide.md    寫作、版本、驗證規範與章節模板

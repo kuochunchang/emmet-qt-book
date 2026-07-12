@@ -44,8 +44,14 @@ MDBOOK_BIN=/path/to/mdbook ./scripts/book-check
 
 自動安裝需要 Bash、Python 3.11 以上、`curl`、`sha256sum`、`tar` 與 `install`。
 目前實際驗證基線是 Linux／Bash；`MDBOOK_BIN` 只略過自動安裝，不代表原生
-Windows 已受支援。檢查不讀取 `../emmet-qt-bt1`，不需要 private repository、
-API key 或其他秘密。
+Windows 已受支援。
+
+檢查**必須**能存取配套 repository（依序解析 `$EMMET_QT_BT1_DIR` 與
+`../emmet-qt-bt1`），否則以 exit 2 中止。台帳的基線與 evidence 無法離線驗證，
+若允許「找不到就跳過」，綠色就會有「驗過了」與「沒驗」兩種含義。先依
+[實作準備](../manuscript/front-matter/setup.md)建立隔離 worktree。對配套 repo
+只讀，只用 `rev-parse` 與 `cat-file`，永不 `checkout`／`fetch`／`worktree add`。
+不需要 API key 或其他秘密。
 
 命令依序執行：
 
@@ -58,8 +64,9 @@ API key 或其他秘密。
 4. 驗證 `SUMMARY.md` target 存在、不重複、不逃出來源，並找出孤兒書稿；
 5. 對 `book-check.toml` 指定的正文與操作型 front matter 驗證章首 metadata、內容
    狀態和章末作者驗證紀錄；
-6. 驗證[作者驗證台帳](verification-ledger.md)的 schema、document-level coverage、
-   完整 SHA、checksum 格式、命令、結果、日期與章稿交叉一致性；
+6. 驗證[作者驗證台帳](verification-ledger.md)：schema、document-level coverage、
+   `[baselines]` 的 tag 在配套 repo 真的解析到宣告的 commit、每筆 `repo:`
+   evidence 真的存在於該 commit、checksum 格式、結果、日期與章稿交叉一致性；
 7. 確認來源與台帳不會被 `.gitignore` 靜默排除，且 `book/` 已忽略、沒有 tracked
    產物；
 8. 在暫存 staging 以固定版本 mdBook 建置 HTML；只有舊 `book/` 帶有本工具
