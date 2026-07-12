@@ -230,7 +230,7 @@ class SourceCheckTests(unittest.TestCase):
     def test_companion_is_resolved_from_the_sibling_directory(self) -> None:
         from scripts.book_check import _resolve_companion
 
-        companion, error = _resolve_companion(self.fixture.root)
+        companion, error, _ = _resolve_companion(self.fixture.root)
         self.assertIsNone(error)
         self.assertEqual(self.fixture.companion.root, companion)
 
@@ -238,9 +238,10 @@ class SourceCheckTests(unittest.TestCase):
         from scripts.book_check import _resolve_companion
 
         shutil.rmtree(self.fixture.companion.root)
-        companion, error = _resolve_companion(self.fixture.root)
+        companion, error, tried = _resolve_companion(self.fixture.root)
         self.assertIsNone(companion)
         self.assertEqual("COMPANION_MISSING", error)
+        self.assertIn(str(self.fixture.companion.root), tried)
 
     def test_companion_env_override_must_be_a_git_repository(self) -> None:
         from scripts.book_check import _resolve_companion
@@ -249,9 +250,22 @@ class SourceCheckTests(unittest.TestCase):
         plain.mkdir()
         os.environ["EMMET_QT_BT1_DIR"] = str(plain)
         self.addCleanup(os.environ.pop, "EMMET_QT_BT1_DIR", None)
-        companion, error = _resolve_companion(self.fixture.root)
+        companion, error, tried = _resolve_companion(self.fixture.root)
         self.assertIsNone(companion)
         self.assertEqual("COMPANION_NOT_GIT", error)
+        self.assertIn(str(plain), tried)
+        self.assertIn("EMMET_QT_BT1_DIR", tried)
+
+    def test_companion_not_git_names_the_sibling_default_path(self) -> None:
+        # 失敗診斷必須指名實際檢查的路徑：sibling default 不是 git repo 時，
+        # 不能把責任推給沒有設定的 $EMMET_QT_BT1_DIR。
+        from scripts.book_check import _resolve_companion
+
+        shutil.rmtree(self.fixture.companion.root / ".git")
+        companion, error, tried = _resolve_companion(self.fixture.root)
+        self.assertIsNone(companion)
+        self.assertEqual("COMPANION_NOT_GIT", error)
+        self.assertIn(str(self.fixture.companion.root), tried)
 
     def test_baseline_verification_against_the_companion(self) -> None:
         from scripts.book_check import Finding, _verify_baseline

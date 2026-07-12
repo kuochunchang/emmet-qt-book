@@ -1804,20 +1804,27 @@ def _git_command(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _resolve_companion(root: Path) -> tuple[Path | None, str | None]:
+def _resolve_companion(root: Path) -> tuple[Path | None, str | None, str]:
     """Locate the pinned companion repository.
 
     Read-only: callers may only run `rev-parse` and `cat-file` against it.
     An explicit `$EMMET_QT_BT1_DIR` never falls back to the sibling default;
     a typo must fail rather than silently downgrade to another repository.
+    The last element names the path that was actually checked (and where it
+    came from), so failure diagnostics never blame the wrong knob.
     """
     override = os.environ.get(COMPANION_ENV)
-    candidate = Path(override) if override else root.parent / COMPANION_REPO
+    if override:
+        candidate = Path(override)
+        tried = f"${COMPANION_ENV}={candidate}"
+    else:
+        candidate = root.parent / COMPANION_REPO
+        tried = f"{candidate}（預設 sibling；${COMPANION_ENV} 未設定）"
     if not candidate.is_dir():
-        return None, "COMPANION_MISSING"
+        return None, "COMPANION_MISSING", tried
     if _git_command(candidate, "rev-parse", "--git-common-dir").returncode != 0:
-        return None, "COMPANION_NOT_GIT"
-    return candidate.resolve(), None
+        return None, "COMPANION_NOT_GIT", tried
+    return candidate.resolve(), None, tried
 
 
 def _verify_baseline(
@@ -2228,14 +2235,14 @@ def validate_source(
     patterns = _metadata_patterns(root, findings, check_config)
     ledger_path = _verification_ledger_path(root, findings)
     if ledger_path is not None and companion is None:
-        companion, _ = _resolve_companion(root)
+        companion, _, tried = _resolve_companion(root)
         if companion is None:
             findings.append(
                 Finding(
                     "COMPANION_MISSING",
                     VERIFICATION_LEDGER_PATH,
                     0,
-                    "找不到配套 repo；台帳身分驗證無法執行",
+                    f"找不到配套 repo（{tried}）；台帳身分驗證無法執行",
                 )
             )
             ledger_path = None
@@ -2984,23 +2991,20 @@ def _mdbook_version(mdbook: Path) -> str | None:
     return result.stdout.strip()
 
 
-def run(root: Path, mdbook: Path, companion: Path | None = None) -> int:
+def run(root: Path, mdbook: Path) -> int:
     root = root.resolve()
     print(f"Python {sys.version.split()[0]}")
 
-    error: str | None = None
-    if companion is None:
-        companion, error = _resolve_companion(root)
+    companion, error, tried = _resolve_companion(root)
     if companion is None:
         if error == "COMPANION_NOT_GIT":
             print(
-                f"COMPANION_NOT_GIT ${COMPANION_ENV} 指向的路徑不是 git repository",
+                f"COMPANION_NOT_GIT 配套路徑不是 git repository：{tried}",
                 file=sys.stderr,
             )
         else:
             print(
-                f"COMPANION_MISSING 找不到配套 repo"
-                f"（試過 ${COMPANION_ENV}、{root.parent / COMPANION_REPO}）\n"
+                f"COMPANION_MISSING 找不到配套 repo：{tried}\n"
                 "台帳身分驗證無法執行；先依 manuscript/front-matter/setup.md "
                 "建立隔離 worktree。",
                 file=sys.stderr,
@@ -3080,9 +3084,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--mdbook", type=Path, required=True)
-    parser.add_argument("--companion", type=Path, default=None)
     arguments = parser.parse_args()
-    return run(arguments.root, arguments.mdbook, arguments.companion)
+    return run(arguments.root, arguments.mdbook)
 
 
 if __name__ == "__main__":
