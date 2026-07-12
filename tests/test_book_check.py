@@ -204,10 +204,8 @@ def codes(findings) -> set[str]:
 
 class SourceCheckTests(unittest.TestCase):
     def setUp(self) -> None:
-        # book-check 允許用 EMMET_QT_BT1_DIR 覆寫配套路徑。呼叫者環境裡的值
-        # 不能滲進 fixture，否則測試會依賴外部狀態——而且會依賴執行順序：
-        # 剛好有另一個測試在 cleanup 時 pop 掉它，字母序又讓那個測試排在
-        # 台帳測試之前，整套就會「意外通過」。
+        # EMMET_QT_BT1_DIR 會覆寫配套路徑；呼叫者環境裡的值不能滲進 fixture，
+        # 否則測試結果取決於外部環境與執行順序。
         original = os.environ.pop("EMMET_QT_BT1_DIR", None)
         if original is not None:
             self.addCleanup(os.environ.__setitem__, "EMMET_QT_BT1_DIR", original)
@@ -551,7 +549,6 @@ class SourceCheckTests(unittest.TestCase):
         self.assertIn("LEDGER_INTERFACE_CONTRADICTION", codes(self.validate()))
 
         # 「不適用：」後面沒有具體原因 → 兩個 NA 規則都必須失敗。
-        # （helper 的 formal_entrypoints 本來就是 []，不需要再 replace。）
         content = (
             self.ledger()
             .replace(

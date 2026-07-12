@@ -518,12 +518,7 @@ def _metadata_patterns(
 
 
 def _verification_ledger_path(root: Path, findings: list[Finding]) -> Path | None:
-    """The ledger location is a constant, not a setting.
-
-    It used to be declared in `book-check.toml` and then checked against this
-    same constant, so the path-escape guards behind that check could never
-    fire. A config key with exactly one accepted value is not configuration.
-    """
+    """The ledger location is fixed, not configurable: there is exactly one."""
     path = root / "verification" / "ledger.toml"
     if _path_uses_symlink(path, root):
         findings.append(
@@ -1459,8 +1454,7 @@ def _validate_verification_ledger(
                 )
             )
 
-        # 有效基線：pass 用 batch 宣告；needs-revalidation 用 verified_against
-        # 記錄的舊基線。舊基線不是免驗區，走同一組驗證。
+        # verified_against 記錄的舊基線不是免驗區，走與 [baselines] 相同的驗證。
         effective: tuple[str, str] | None = None
         if override is not None:
             match = LEDGER_BASELINE_RE.fullmatch(override)
@@ -1836,8 +1830,7 @@ def _verify_baseline(
 ) -> bool:
     """Confirm the declared tag really resolves to the declared commit.
 
-    `manuscript/front-matter/setup.md` already tells readers to run this by
-    hand because a tag can be moved. The tool now enforces it too.
+    A tag can be moved, so the tag alone is not an identity.
     """
     resolved = _git_command(
         companion, "rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}"
