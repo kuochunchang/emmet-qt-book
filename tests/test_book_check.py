@@ -232,6 +232,69 @@ class SourceCheckTests(unittest.TestCase):
         self.assertIsNone(companion)
         self.assertEqual("COMPANION_NOT_GIT", error)
 
+    def test_baseline_verification_against_the_companion(self) -> None:
+        from scripts.book_check import Finding, _verify_baseline
+
+        companion = self.fixture.companion
+        findings: list[Finding] = []
+        self.assertTrue(
+            _verify_baseline(
+                companion.root, "v0.3.0", companion.commit, "d", "l", findings
+            )
+        )
+        self.assertEqual([], findings)
+
+        findings = []
+        self.assertFalse(
+            _verify_baseline(
+                companion.root, "v9.9.9", companion.commit, "d", "l", findings
+            )
+        )
+        self.assertEqual(["BASELINE_TAG_UNRESOLVED"], [f.code for f in findings])
+
+        findings = []
+        self.assertFalse(
+            _verify_baseline(companion.root, "v0.3.0", "0" * 40, "d", "l", findings)
+        )
+        self.assertEqual(["BASELINE_TAG_MISMATCH"], [f.code for f in findings])
+
+    def test_moved_tag_is_caught(self) -> None:
+        from scripts.book_check import Finding, _verify_baseline
+
+        companion = self.fixture.companion
+        original = companion.commit
+        moved = companion.add_commit("src/quant/new.py", "# new\n")
+        companion.move_tag("v0.3.0", moved)
+
+        findings: list[Finding] = []
+        self.assertFalse(
+            _verify_baseline(companion.root, "v0.3.0", original, "d", "l", findings)
+        )
+        self.assertEqual(["BASELINE_TAG_MISMATCH"], [f.code for f in findings])
+
+    def test_evidence_is_checked_against_the_baseline_commit_not_head(self) -> None:
+        from scripts.book_check import _evidence_exists
+
+        companion = self.fixture.companion
+        baseline = companion.commit
+        head = companion.add_commit("src/quant/later.py", "# later\n")
+
+        self.assertTrue(
+            _evidence_exists(
+                companion.root, baseline, "tests/unit/test_models_orders.py"
+            )
+        )
+        self.assertFalse(
+            _evidence_exists(companion.root, baseline, "src/quant/missing.py")
+        )
+        # 檔案存在於 HEAD，但不存在於 baseline commit：檢查必須是 commit-scoped，
+        # 不是 worktree-scoped。少了這條，整個 tier-2 可以被「檔案現在還在，
+        # 所以算過」的實作悄悄掏空。
+        self.assertTrue(_evidence_exists(companion.root, head, "src/quant/later.py"))
+        self.assertFalse(
+            _evidence_exists(companion.root, baseline, "src/quant/later.py")
+        )
+
     def test_minimal_valid_book_passes_and_fenced_template_is_ignored(self) -> None:
         path = "manuscript/chapters/01.md"
         self.fixture.write(

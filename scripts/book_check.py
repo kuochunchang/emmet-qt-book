@@ -1725,6 +1725,50 @@ def _resolve_companion(root: Path) -> tuple[Path | None, str | None]:
     return candidate.resolve(), None
 
 
+def _verify_baseline(
+    companion: Path,
+    tag: str,
+    sha: str,
+    display: str,
+    label: str,
+    findings: list[Finding],
+) -> bool:
+    """Confirm the declared tag really resolves to the declared commit.
+
+    `manuscript/front-matter/setup.md` already tells readers to run this by
+    hand because a tag can be moved. The tool now enforces it too.
+    """
+    resolved = _git_command(
+        companion, "rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}"
+    )
+    if resolved.returncode != 0:
+        findings.append(
+            Finding(
+                "BASELINE_TAG_UNRESOLVED",
+                display,
+                0,
+                f"{label}：配套 repo 沒有 tag {tag}；可能需要 git fetch --tags",
+            )
+        )
+        return False
+    actual = resolved.stdout.strip()
+    if actual != sha:
+        findings.append(
+            Finding(
+                "BASELINE_TAG_MISMATCH",
+                display,
+                0,
+                f"{label}：tag {tag} 解析到 {actual}，台帳宣告 {sha}；tag 可能已被移動",
+            )
+        )
+        return False
+    return True
+
+
+def _evidence_exists(companion: Path, sha: str, path: str) -> bool:
+    return _git_command(companion, "cat-file", "-e", f"{sha}:{path}").returncode == 0
+
+
 def _repository_files(root: Path) -> list[Path]:
     listed = _git_command(
         root,
