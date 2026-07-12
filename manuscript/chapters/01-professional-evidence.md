@@ -169,6 +169,7 @@
 
 ## 作者驗證紀錄
 
+- 驗證對象：系統對照表的模組路徑、發布基線與訂單模型行為
 - 對照 tag／commit：`v0.3.0@c999965e5cc923281541409cda9502beb93b8a60`
 - 驗證命令：核對 tag SHA；執行 `uv run pytest tests/unit/test_models_orders.py -q`
 - 通過結果：`32 passed`
