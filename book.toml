@@ -1,0 +1,11 @@
+[book]
+title = "Emmet 量化交易員養成"
+description = "從可信研究、風險紀律到人與系統共同演進"
+language = "zh-TW"
+src = "manuscript"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]

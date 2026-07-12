@@ -29,17 +29,34 @@
 ## 導覽
 
 - [全書目錄](manuscript/SUMMARY.md)
-- [序章：怎麼使用這本書](manuscript/front-matter/preface.md)
+- [序章：怎麼使用這本書](manuscript/preface.md)
 - [實作準備：建立版本固定的配套環境](manuscript/front-matter/setup.md)
 - [權威課程大綱](docs/curriculum.md)
 - [寫作指南與章節模板](docs/authoring-guide.md)
 
 ## 建議閱讀方式
 
-全書使用序章定義的[七步證據閉環](manuscript/front-matter/preface.md#七步證據閉環)，
+全書使用序章定義的[七步證據閉環](manuscript/preface.md#七步證據閉環)，
 把執行前預測、系統驗證、專業決定與系統回饋連成同一條學習路徑。第一次閱讀
 可依序完成主線；已有交易經驗者可由
 [課程大綱的能力地圖](docs/curriculum.md#配套系統能力地圖)直接跳到需要的主題。
+
+## 書籍建置與閱讀
+
+作者在 repository 根目錄只需執行一個品質入口：
+
+```bash
+./scripts/book-check
+```
+
+目前驗證基線為 Linux／Bash。
+
+命令會以固定版本的 mdBook 建置並檢查書稿；成功後由 `book/index.html` 閱讀 HTML
+版。尚未建置時，可由[全書目錄](manuscript/SUMMARY.md)開啟已有章稿；空 target
+表示該章尚未撰寫。
+目前正式支援範圍只有 HTML，PDF／EPUB 明確延後，不以瀏覽器列印或未驗證的轉檔
+冒充正式產物。安裝條件、固定版本、檢查規則與格式決策見
+[出版工具鏈與 book check](docs/publishing.md)。
 
 ## Repository 結構
 
@@ -47,13 +64,19 @@
 AGENTS.md                 Agent 寫作 gate 與工作規則
 CLAUDE.md                 Claude Code 相容入口，匯入 AGENTS.md
 README.md                 專案入口與目前基線
+book.toml                 mdBook 出版設定
+book-check.toml           metadata 適用範圍
 docs/
 ├── curriculum.md         課程、章序、能力地圖與開發里程碑
-└── authoring-guide.md    寫作、版本、驗證規範與章節模板
+├── authoring-guide.md    寫作、版本、驗證規範與章節模板
+└── publishing.md         出版格式、工具版本與 book check 契約
 manuscript/
 ├── SUMMARY.md            讀者閱讀順序
-├── front-matter/         序言、導讀與版本固定的實作準備
+├── preface.md            讀者契約、證據閉環與內容狀態正本
+├── front-matter/         版本固定的實作準備
 └── chapters/             正文章節
+scripts/book-check        唯一本機建置／品質入口
+tests/                    book check 正向與故障案例
 ```
 
 教育目標、章序與寫作批次由 `docs/curriculum.md` 維護；README 不另行定義 agent

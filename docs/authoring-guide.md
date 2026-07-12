@@ -1,7 +1,7 @@
 # 寫作指南
 
 本文件是書稿語言、章節結構、範例、版本與驗證方式的作者規範。讀者可見的
-七步證據閉環與內容狀態以[序章](../manuscript/front-matter/preface.md)為正本；全書
+七步證據閉環與內容狀態以[序章](../manuscript/preface.md)為正本；全書
 教育目標、章序、系統能力地圖與開發里程碑統一見[課程大綱](curriculum.md)。
 
 ## 讀者假設
@@ -26,11 +26,19 @@
 
 ## 章節狀態與版本
 
-狀態名稱與讀者承諾只在[序章的內容狀態](../manuscript/front-matter/preface.md#內容狀態)
+狀態名稱與讀者承諾只在[序章的內容狀態](../manuscript/preface.md#內容狀態)
 定義，作者不得另造近義標籤。所有章節與具操作性的 front matter 都在開頭記錄
 `配套基線`、`內容狀態` 與 `最後驗證日期`，並以章末作者驗證紀錄支持宣稱。
 
 若配套介面改變，先更新課程大綱的能力地圖，再修訂受影響章節與驗證紀錄。
+
+所有書稿 PR 在交付前由 repository 根目錄執行 `./scripts/book-check`。出版格式、
+固定工具版本、孤兒與 metadata 適用範圍統一見[出版工具鏈與 book check](publishing.md)；
+不得以單獨執行 renderer 取代完整品質入口。
+
+程式、HTML 或 Markdown 語法示範放在 fenced code block，不直接嵌入可執行的 raw
+HTML。書稿中的圖片、script 與其他 reader resource 必須納入 repository 並可由
+book check 在離線產物中解析；外部網址只作為讀者連結。
 
 ## 共用版本固定機制
 
@@ -54,7 +62,7 @@
 
 ## 章節固定結構
 
-每章依序章唯一定義的[七步證據閉環](../manuscript/front-matter/preface.md#七步證據閉環)
+每章依序章唯一定義的[七步證據閉環](../manuscript/preface.md#七步證據閉環)
 安排；下方章節模板是它的作者面實作，不另行改寫閉環定義。
 
 沒有正式入口的章節可使用手算、設計閱讀或已發布測試證據，但必須標示內容
