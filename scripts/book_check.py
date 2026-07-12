@@ -58,8 +58,9 @@ OUTPUT_MARKER_CONTENT = "emmet-qt-book book-check v1\n"
 COMPANION_REPO = "emmet-qt-bt1"
 COMPANION_ENV = "EMMET_QT_BT1_DIR"
 VERIFICATION_LEDGER_PATH = "verification/ledger.toml"
-LEDGER_SCHEMA_VERSION = 1
+LEDGER_SCHEMA_VERSION = 2
 LEDGER_RESULT_VALUES = {"pass", "needs-revalidation"}
+LEDGER_BATCH_RE = re.compile(r"^W[1-9][0-9]*$")
 LEDGER_RECORD_FIELDS = {
     "id",
     "batch",
@@ -67,8 +68,6 @@ LEDGER_RECORD_FIELDS = {
     "chapter",
     "claim",
     "content_state",
-    "tag_commit",
-    "full_commit",
     "data_checksums",
     "data_checksum_note",
     "formal_entrypoints",
@@ -76,13 +75,17 @@ LEDGER_RECORD_FIELDS = {
     "interface_note",
     "evidence_refs",
     "verification_commands",
-    "oracle",
+    "executable",
+    "oracle_exit_code",
+    "oracle_stdout_contains",
     "result",
     "observed",
     "known_differences",
     "verified_on",
     "revalidation_triggers",
 }
+# 只允許在特定情境出現；出現在別處或該出現卻缺席，兩個方向都失敗。
+LEDGER_CONDITIONAL_FIELDS = {"verified_against", "executable_note"}
 LEDGER_LIST_FIELDS = {
     "data_checksums",
     "formal_entrypoints",
@@ -91,12 +94,20 @@ LEDGER_LIST_FIELDS = {
     "verification_commands",
     "known_differences",
     "revalidation_triggers",
+    "oracle_stdout_contains",
 }
-LEDGER_STRING_FIELDS = LEDGER_RECORD_FIELDS - LEDGER_LIST_FIELDS
+LEDGER_BOOL_FIELDS = {"executable"}
+LEDGER_INT_FIELDS = {"oracle_exit_code"}
+LEDGER_STRING_FIELDS = (
+    (LEDGER_RECORD_FIELDS | LEDGER_CONDITIONAL_FIELDS)
+    - LEDGER_LIST_FIELDS
+    - LEDGER_BOOL_FIELDS
+    - LEDGER_INT_FIELDS
+)
 LEDGER_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-LEDGER_TAG_COMMIT_RE = re.compile(r"^([^@\s]+)@([0-9a-f]{40})$")
+LEDGER_BASELINE_RE = re.compile(r"^([^@\s]+)@([0-9a-f]{40})$")
 LEDGER_DATA_CHECKSUM_RE = re.compile(r"^([^=\s]+)=sha256:([0-9a-f]{64})$")
-LEDGER_EVIDENCE_REF_RE = re.compile(r"^repo:emmet-qt-bt1@([0-9a-f]{40}):([^\x00]+)$")
+LEDGER_EVIDENCE_REF_RE = re.compile(r"^repo:emmet-qt-bt1:([^\x00]+)$")
 
 
 class Finding:
@@ -960,7 +971,8 @@ def _ledger_document_claims(
 def _validate_ledger_evidence_ref(
     root: Path,
     reference: str,
-    expected_commit: str | None,
+    companion: Path,
+    baseline_sha: str | None,
     repository_files: set[Path],
     display: str,
     record_id: str,
@@ -968,7 +980,7 @@ def _validate_ledger_evidence_ref(
 ) -> None:
     repository_match = LEDGER_EVIDENCE_REF_RE.fullmatch(reference)
     if repository_match:
-        commit, raw_path = repository_match.groups()
+        raw_path = repository_match.group(1)
         pure = PurePosixPath(raw_path)
         if (
             pure.is_absolute()
@@ -989,13 +1001,19 @@ def _validate_ledger_evidence_ref(
                     f"record {record_id!r} 的 repository evidence path 非法：{reference!r}",
                 )
             )
-        if expected_commit is not None and commit != expected_commit:
+            return
+        # 對 baseline commit 驗證，不是對工作樹：檔案「現在還在」不代表它在
+        # 台帳宣告的那個 commit 存在過。
+        if baseline_sha is not None and not _evidence_exists(
+            companion, baseline_sha, raw_path
+        ):
             findings.append(
                 Finding(
-                    "LEDGER_EVIDENCE_COMMIT",
+                    "LEDGER_EVIDENCE_MISSING",
                     display,
                     0,
-                    f"record {record_id!r} 的 evidence commit 與 full_commit 不一致",
+                    f"record {record_id!r} 的 evidence 在 {baseline_sha[:12]} 不存在："
+                    f"{raw_path}",
                 )
             )
         return
@@ -1140,6 +1158,51 @@ def _validate_ledger_evidence_ref(
     )
 
 
+def _ledger_baselines(
+    ledger: dict, companion: Path, display: str, findings: list[Finding]
+) -> dict[str, tuple[str, str]]:
+    """Resolve and verify one baseline per writing batch.
+
+    Only batches whose declared tag really resolves to the declared commit are
+    returned. A broken baseline therefore also fails every record that depends
+    on it, instead of letting the rest pass on a root cause that was reported
+    once and then forgotten.
+    """
+    raw = ledger.get("baselines")
+    if not isinstance(raw, dict) or not raw:
+        findings.append(
+            Finding("BASELINE_MISSING", display, 0, "[baselines] 必須是非空 table")
+        )
+        return {}
+    resolved: dict[str, tuple[str, str]] = {}
+    for batch in sorted(raw):
+        label = f"baselines.{batch}"
+        value = raw[batch]
+        if not LEDGER_BATCH_RE.fullmatch(batch):
+            findings.append(
+                Finding(
+                    "BASELINE_BATCH", display, 0, f"{label}：batch 必須是 W<number>"
+                )
+            )
+            continue
+        if not isinstance(value, str) or (
+            match := LEDGER_BASELINE_RE.fullmatch(value.strip())
+        ) is None:
+            findings.append(
+                Finding(
+                    "BASELINE_FORMAT",
+                    display,
+                    0,
+                    f"{label}：值必須是 tag@40 字元 SHA",
+                )
+            )
+            continue
+        tag, sha = match.group(1), match.group(2)
+        if _verify_baseline(companion, tag, sha, display, label, findings):
+            resolved[batch] = (tag, sha)
+    return resolved
+
+
 def _validate_verification_ledger(
     root: Path,
     ledger_path: Path,
@@ -1149,11 +1212,13 @@ def _validate_verification_ledger(
     findings: list[Finding],
     *,
     check_git: bool,
+    companion: Path,
 ) -> None:
     display = ledger_path.relative_to(root).as_posix()
     ledger = _load_toml(ledger_path, "LEDGER_PARSE", findings, display)
     repository_files = set(_repository_files(root))
-    unknown_top_level = set(ledger) - {"schema_version", "records"}
+    baselines = _ledger_baselines(ledger, companion, display, findings)
+    unknown_top_level = set(ledger) - {"schema_version", "baselines", "records"}
     if unknown_top_level:
         findings.append(
             Finding(
@@ -1196,7 +1261,9 @@ def _validate_verification_ledger(
         if isinstance(identifier_value, str) and identifier_value.strip():
             label = f"record {identifier_value!r}"
         missing_fields = LEDGER_RECORD_FIELDS - set(record)
-        unknown_fields = set(record) - LEDGER_RECORD_FIELDS
+        unknown_fields = set(record) - (
+            LEDGER_RECORD_FIELDS | LEDGER_CONDITIONAL_FIELDS
+        )
         if missing_fields:
             findings.append(
                 Finding(
@@ -1319,7 +1386,7 @@ def _validate_verification_ledger(
             seen_claims.add(claim_key)
 
         batch = strings.get("batch")
-        if batch is not None and not re.fullmatch(r"W[1-9][0-9]*", batch):
+        if batch is not None and not LEDGER_BATCH_RE.fullmatch(batch):
             findings.append(
                 Finding(
                     "LEDGER_BATCH",
@@ -1329,41 +1396,27 @@ def _validate_verification_ledger(
                 )
             )
 
-        full_commit = strings.get("full_commit")
-        if full_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", full_commit):
+        executable = record.get("executable")
+        if "executable" in record and not isinstance(executable, bool):
             findings.append(
                 Finding(
-                    "LEDGER_COMMIT",
+                    "LEDGER_FIELD_TYPE",
                     display,
                     0,
-                    f"record {record_label!r} 的 full_commit 必須是完整 40 字元 SHA",
+                    f"record {record_label!r} 的 executable 必須是 bool",
                 )
             )
-            full_commit = None
-        tag_identity: tuple[str, str] | None = None
-        tag_commit = strings.get("tag_commit")
-        if tag_commit is not None:
-            match = LEDGER_TAG_COMMIT_RE.fullmatch(tag_commit)
-            if match is None:
-                findings.append(
-                    Finding(
-                        "LEDGER_BASELINE",
-                        display,
-                        0,
-                        f"record {record_label!r} 的 tag_commit 必須包含 tag 與完整 SHA",
-                    )
+            executable = None
+        # bool 是 int 的子類；用 type() 才擋得住 `oracle_exit_code = true`。
+        if "oracle_exit_code" in record and type(record["oracle_exit_code"]) is not int:
+            findings.append(
+                Finding(
+                    "LEDGER_ORACLE",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 oracle_exit_code 必須是 int",
                 )
-            else:
-                tag_identity = (match.group(1), match.group(2))
-                if full_commit is not None and match.group(2) != full_commit:
-                    findings.append(
-                        Finding(
-                            "LEDGER_BASELINE_MISMATCH",
-                            display,
-                            0,
-                            f"record {record_label!r} 的 tag_commit 與 full_commit 不一致",
-                        )
-                    )
+            )
 
         state = strings.get("content_state")
         if state is not None and state not in states:
@@ -1395,6 +1448,92 @@ def _validate_verification_ledger(
                     f"record {record_label!r} 只有「需重驗」文件可標 needs-revalidation",
                 )
             )
+
+        override = strings.get("verified_against")
+        if result == "needs-revalidation":
+            if override is None:
+                findings.append(
+                    Finding(
+                        "LEDGER_OVERRIDE_MISSING",
+                        display,
+                        0,
+                        f"record {record_label!r} 為 needs-revalidation，必須以 "
+                        "verified_against 記錄最後一次通過的基線",
+                    )
+                )
+        elif override is not None:
+            findings.append(
+                Finding(
+                    "LEDGER_OVERRIDE_FORBIDDEN",
+                    display,
+                    0,
+                    f"record {record_label!r} 不是 needs-revalidation，不得使用 "
+                    "verified_against",
+                )
+            )
+
+        note = strings.get("executable_note")
+        if executable is False:
+            if (
+                note is None
+                or not note.startswith("不適用：")
+                or not note.removeprefix("不適用：").strip()
+            ):
+                findings.append(
+                    Finding(
+                        "LEDGER_EXECUTABLE_NOTE_MISSING",
+                        display,
+                        0,
+                        f"record {record_label!r} executable=false 時必須以「不適用：」"
+                        "說明具體原因",
+                    )
+                )
+        elif note is not None:
+            findings.append(
+                Finding(
+                    "LEDGER_EXECUTABLE_NOTE_FORBIDDEN",
+                    display,
+                    0,
+                    f"record {record_label!r} executable=true 時不得有 executable_note",
+                )
+            )
+
+        # 有效基線：pass 用 batch 宣告；needs-revalidation 用 verified_against
+        # 記錄的舊基線。舊基線不是免驗區，走同一組驗證。
+        effective: tuple[str, str] | None = None
+        if override is not None:
+            match = LEDGER_BASELINE_RE.fullmatch(override)
+            if match is None:
+                findings.append(
+                    Finding(
+                        "BASELINE_FORMAT",
+                        display,
+                        0,
+                        f"record {record_label!r} 的 verified_against 必須是 "
+                        "tag@40 字元 SHA",
+                    )
+                )
+            elif _verify_baseline(
+                companion,
+                match.group(1),
+                match.group(2),
+                display,
+                f"record {record_label!r} 的 verified_against",
+                findings,
+            ):
+                effective = (match.group(1), match.group(2))
+        elif batch is not None:
+            effective = baselines.get(batch)
+            if effective is None:
+                findings.append(
+                    Finding(
+                        "LEDGER_BATCH_UNDECLARED",
+                        display,
+                        0,
+                        f"record {record_label!r} 的 batch {batch} 在 [baselines] "
+                        "沒有可用宣告",
+                    )
+                )
 
         verified_on = strings.get("verified_on")
         if verified_on is not None:
@@ -1524,7 +1663,8 @@ def _validate_verification_ledger(
             _validate_ledger_evidence_ref(
                 root,
                 reference,
-                full_commit,
+                companion,
+                effective[1] if effective is not None else None,
                 repository_files,
                 display,
                 record_label,
@@ -1635,8 +1775,8 @@ def _validate_verification_ledger(
                     f"record {record_label!r} 的日期與章首最後驗證日期不一致",
                 )
             )
-        if tag_identity is not None and header_identity is not None:
-            tag, commit = tag_identity
+        if effective is not None and header_identity is not None:
+            tag, commit = effective
             header_tag, header_commit = header_identity
             if tag != header_tag or not commit.startswith(header_commit):
                 findings.append(
@@ -1644,17 +1784,17 @@ def _validate_verification_ledger(
                         "LEDGER_BASELINE_MISMATCH",
                         display,
                         0,
-                        f"record {record_label!r} 的 tag_commit 與章首不一致",
+                        f"record {record_label!r} 的有效基線與章首不一致",
                     )
                 )
-        if tag_identity is not None and author_identity is not None:
-            if tag_identity != author_identity:
+        if effective is not None and author_identity is not None:
+            if effective != author_identity:
                 findings.append(
                     Finding(
                         "LEDGER_AUTHOR_MISMATCH",
                         display,
                         0,
-                        f"record {record_label!r} 的 tag_commit 與章末作者紀錄不一致",
+                        f"record {record_label!r} 的有效基線與章末作者紀錄不一致",
                     )
                 )
 
@@ -2318,7 +2458,7 @@ def validate_source(
         if text is not None:
             _validate_metadata(path, display, text, states, findings)
 
-    if ledger_path is not None:
+    if ledger_path is not None and companion is not None:
         _validate_verification_ledger(
             root,
             ledger_path,
@@ -2327,6 +2467,7 @@ def validate_source(
             states,
             findings,
             check_git=check_git,
+            companion=companion,
         )
 
     if check_git:

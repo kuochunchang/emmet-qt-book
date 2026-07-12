@@ -15,9 +15,6 @@ from scripts.book_check import (
 )
 
 
-FULL_SHA = "c999965e5cc923281541409cda9502beb93b8a60"
-
-
 class CompanionFixture:
     """Synthetic emmet-qt-bt1: a real git repository for tier-2 checks."""
 
@@ -60,16 +57,18 @@ class CompanionFixture:
         self.git("tag", "-f", tag, commit)
 
 
-def chapter(title: str = "第一章", state: str = "可操作") -> str:
+def chapter(title: str = "第一章", state: str = "可操作", *, sha: str) -> str:
+    """`sha` 必填：synthetic companion 每次產生的 commit 都不同，忘了傳會讓
+    章首基線對不上 [baselines]，噴出一個難以理解的 BASELINE_TAG_MISMATCH。"""
     return f"""# {title}
 
-> 配套基線：`emmet-qt-bt1 v0.3.0@c999965e5cc9`
+> 配套基線：`emmet-qt-bt1 v0.3.0@{sha[:12]}`
 > 內容狀態：{state}
 > 最後驗證日期：2026-07-12
 
 ## 作者驗證紀錄
 
-- 對照 tag／commit：`v0.3.0@{FULL_SHA}`
+- 對照 tag／commit：`v0.3.0@{sha}`
 - 驗證命令：`true`
 - 通過結果：命令成功
 - 待處理差異：無
@@ -83,34 +82,40 @@ def ledger(
     title: str = "第一章",
     state: str = "可操作",
     result: str = "pass",
+    sha: str,
+    batch: str = "W1",
+    extra: str = "",
 ) -> str:
-    return f'''schema_version = 1
+    return f'''schema_version = 2
+
+[baselines]
+W1 = "v0.3.0@{sha}"
 
 [[records]]
 id = "{record_id}"
-batch = "W1"
+batch = "{batch}"
 document = "{document}"
 chapter = "{title}"
 claim = "固定版本的訂單模型 smoke 通過。"
 content_state = "{state}"
-tag_commit = "v0.3.0@{FULL_SHA}"
-full_commit = "{FULL_SHA}"
 data_checksums = []
 data_checksum_note = "不適用：這個測試不使用市場資料。"
 formal_entrypoints = []
 schemas = ["quant.common.models.orders.Order"]
 interface_note = "使用已發布的訂單模型測試。"
 evidence_refs = [
-  "repo:emmet-qt-bt1@{FULL_SHA}:tests/unit/test_models_orders.py",
+  "repo:emmet-qt-bt1:tests/unit/test_models_orders.py",
 ]
 verification_commands = ["uv run pytest tests/unit/test_models_orders.py -q"]
-oracle = "exit 0 且顯示 32 passed。"
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = ["32 passed"]
 result = "{result}"
 observed = "32 passed。"
 known_differences = []
 verified_on = "2026-07-12"
 revalidation_triggers = ["訂單模型、測試或基線改變"]
-'''
+{extra}'''
 
 
 class Fixture:
@@ -167,8 +172,12 @@ ledger = "verification/ledger.toml"
 - **需重驗**：既有證據已失效。
 """,
         )
-        self.write("manuscript/chapters/01.md", chapter())
-        self.write("verification/ledger.toml", ledger())
+        self.write("manuscript/chapters/01.md", chapter(sha=self.sha))
+        self.write("verification/ledger.toml", ledger(sha=self.sha))
+
+    @property
+    def sha(self) -> str:
+        return self.companion.commit
 
     def write(self, relative: str, content: str) -> Path:
         path = self.root / relative
@@ -205,6 +214,14 @@ class SourceCheckTests(unittest.TestCase):
 
     def validate(self, *, git: bool = False):
         return validate_source(self.fixture.root, check_git=git)
+
+    def chapter(self, *args, **kwargs) -> str:
+        kwargs.setdefault("sha", self.fixture.sha)
+        return chapter(*args, **kwargs)
+
+    def ledger(self, **kwargs) -> str:
+        kwargs.setdefault("sha", self.fixture.sha)
+        return ledger(**kwargs)
 
     def test_companion_is_resolved_from_the_sibling_directory(self) -> None:
         from scripts.book_check import _resolve_companion
@@ -326,7 +343,7 @@ class SourceCheckTests(unittest.TestCase):
         self.assertIn("NAV_TARGET_MISSING", found)
 
     def test_orphan_fails_even_if_another_chapter_links_to_it(self) -> None:
-        self.fixture.write("manuscript/chapters/02.md", chapter("第二章"))
+        self.fixture.write("manuscript/chapters/02.md", self.chapter("第二章"))
         path = "manuscript/chapters/01.md"
         self.fixture.write(path, self.fixture.read(path) + "\n[第二章](02.md)\n")
         self.assertIn("NAV_ORPHAN", codes(self.validate()))
@@ -351,7 +368,7 @@ class SourceCheckTests(unittest.TestCase):
         path = "manuscript/chapters/01.md"
         self.fixture.write(
             path,
-            chapter(state="未知狀態").replace("> 最後驗證日期：2026-07-12\n", ""),
+            self.chapter(state="未知狀態").replace("> 最後驗證日期：2026-07-12\n", ""),
         )
         found = codes(self.validate())
         self.assertIn("META_MISSING", found)
@@ -359,50 +376,59 @@ class SourceCheckTests(unittest.TestCase):
 
     def test_author_record_requires_full_commit(self) -> None:
         path = "manuscript/chapters/01.md"
-        self.fixture.write(path, chapter().replace(FULL_SHA, "c999965e5cc9"))
+        short = self.fixture.sha[:12]
+        self.fixture.write(path, self.chapter().replace(self.fixture.sha, short))
         self.assertIn("VERIFY_BASELINE", codes(self.validate()))
 
     def test_header_and_author_record_baselines_must_match(self) -> None:
         path = "manuscript/chapters/01.md"
+        sha = self.fixture.sha
         self.fixture.write(
             path,
-            chapter().replace(
-                f"- 對照 tag／commit：`v0.3.0@{FULL_SHA}`",
-                f"- 對照 tag／commit：`v9.9.9@{FULL_SHA}`",
+            self.chapter().replace(
+                f"- 對照 tag／commit：`v0.3.0@{sha}`",
+                f"- 對照 tag／commit：`v9.9.9@{sha}`",
             ),
         )
         self.assertIn("VERIFY_BASELINE_MISMATCH", codes(self.validate()))
 
+    def _second_record(self, **kwargs) -> str:
+        """A second [[records]] block, without repeating the ledger preamble."""
+        body = self.ledger(**kwargs)
+        return body[body.index("[[records]]") :]
+
     def test_verification_ledger_requires_coverage_and_unique_ids(self) -> None:
-        duplicate = ledger() + ledger().replace("schema_version = 1\n\n", "", 1)
+        duplicate = self.ledger() + self._second_record()
         self.fixture.write("verification/ledger.toml", duplicate)
         self.assertIn("LEDGER_ID_DUPLICATE", codes(self.validate()))
 
-        duplicate_claim = ledger() + ledger(record_id="ch01-order-smoke-copy").replace(
-            "schema_version = 1\n\n", "", 1
+        duplicate_claim = self.ledger() + self._second_record(
+            record_id="ch01-order-smoke-copy"
         )
         self.fixture.write("verification/ledger.toml", duplicate_claim)
         self.assertIn("LEDGER_CLAIM_DUPLICATE", codes(self.validate()))
 
-        equivalent_path_claim = ledger() + ledger(
+        equivalent_path_claim = self.ledger() + self._second_record(
             record_id="ch01-order-smoke-copy",
             document="manuscript/chapters/./01.md",
-        ).replace("schema_version = 1\n\n", "", 1)
+        )
         self.fixture.write("verification/ledger.toml", equivalent_path_claim)
         found = codes(self.validate())
         self.assertIn("LEDGER_CLAIM_DUPLICATE", found)
         self.assertIn("LEDGER_DOCUMENT", found)
 
         self.fixture.write(
-            "verification/ledger.toml", "schema_version = 1\nrecords = []\n"
+            "verification/ledger.toml",
+            f'schema_version = 2\n\n[baselines]\nW1 = "v0.3.0@{self.fixture.sha}"\n'
+            "records = []\n",
         )
         found = codes(self.validate())
         self.assertIn("LEDGER_RECORDS", found)
         self.assertIn("LEDGER_COVERAGE", found)
 
     def test_verification_ledger_schema_is_closed_and_versioned(self) -> None:
-        content = ledger().replace(
-            "schema_version = 1", "schema_version = 2\nunknown_root = true"
+        content = self.ledger().replace(
+            "schema_version = 2", "schema_version = 3\nunknown_root = true"
         )
         self.fixture.write(
             "verification/ledger.toml", content + '\nmisspelled_field = "x"\n'
@@ -414,52 +440,76 @@ class SourceCheckTests(unittest.TestCase):
 
         self.fixture.write(
             "verification/ledger.toml",
-            ledger().replace("schema_version = 1", "schema_version = 1.0"),
+            self.ledger().replace("schema_version = 2", "schema_version = 2.0"),
         )
         self.assertIn("LEDGER_SCHEMA_VERSION", codes(self.validate()))
 
         (self.fixture.root / "verification/ledger.toml").write_bytes(b"\xff")
         self.assertIn("LEDGER_PARSE", codes(self.validate()))
 
-        self.fixture.write("verification/ledger.toml", ledger(record_id="bad--id"))
+        self.fixture.write("verification/ledger.toml", self.ledger(record_id="bad--id"))
         self.assertIn("LEDGER_ID", codes(self.validate()))
+
+        # bool 是 int 的子類：oracle_exit_code = true 必須被擋下。
+        self.fixture.write(
+            "verification/ledger.toml",
+            self.ledger().replace("oracle_exit_code = 0", "oracle_exit_code = true"),
+        )
+        self.assertIn("LEDGER_ORACLE", codes(self.validate()))
 
     def test_verification_ledger_must_match_document_claims(self) -> None:
         content = (
-            ledger()
+            self.ledger()
             .replace('chapter = "第一章"', 'chapter = "另一章"')
             .replace('content_state = "可操作"', 'content_state = "規劃中"')
             .replace('verified_on = "2026-07-12"', 'verified_on = "2026-07-11"')
-            .replace("v0.3.0@", "v9.9.9@", 1)
         )
         self.fixture.write("verification/ledger.toml", content)
         found = codes(self.validate())
         self.assertIn("LEDGER_CHAPTER", found)
         self.assertIn("LEDGER_STATE_MISMATCH", found)
         self.assertIn("LEDGER_DATE_MISMATCH", found)
-        self.assertIn("LEDGER_BASELINE_MISMATCH", found)
 
-        alternate = FULL_SHA[:12] + "0" * 28
+        # 每個 sub-case 都完整重寫兩個檔案：斷言不能依賴前一段殘留的 fixture
+        # 狀態，否則之後有人重排區塊，測試會因為錯誤的理由通過。
+        sha = self.fixture.sha
+        self.fixture.write("verification/ledger.toml", self.ledger())
         self.fixture.write(
             "manuscript/chapters/01.md",
-            chapter().replace("- 對照 tag／commit：", "-  對照 tag／commit："),
+            self.chapter().replace(
+                f"> 配套基線：`emmet-qt-bt1 v0.3.0@{sha[:12]}`",
+                f"> 配套基線：`emmet-qt-bt1 v9.9.9@{sha[:12]}`",
+            ),
         )
+        self.assertIn("LEDGER_BASELINE_MISMATCH", codes(self.validate()))
+
+        # 章末作者紀錄與有效基線不一致；欄位前多一個空白，確認寬鬆的空白處理
+        # 不會讓不一致被靜默略過。alternate 與章首短 SHA 同前綴，因此這裡只會
+        # 觸發 LEDGER_AUTHOR_MISMATCH。
+        alternate = sha[:12] + "0" * 28
+        self.fixture.write("verification/ledger.toml", self.ledger())
         self.fixture.write(
-            "verification/ledger.toml", ledger().replace(FULL_SHA, alternate)
+            "manuscript/chapters/01.md",
+            self.chapter().replace(
+                f"- 對照 tag／commit：`v0.3.0@{sha}`",
+                f"-  對照 tag／commit：`v0.3.0@{alternate}`",
+            ),
         )
         self.assertIn("LEDGER_AUTHOR_MISMATCH", codes(self.validate()))
 
+        # 值放在續行：多行欄位解析必須仍然抓到，否則不一致會被靜默略過。
+        self.fixture.write("verification/ledger.toml", self.ledger())
         self.fixture.write(
             "manuscript/chapters/01.md",
-            chapter().replace(
-                f"- 對照 tag／commit：`v0.3.0@{FULL_SHA}`",
-                f"- 對照 tag／commit：\n  `v0.3.0@{FULL_SHA}`",
+            self.chapter().replace(
+                f"- 對照 tag／commit：`v0.3.0@{sha}`",
+                f"- 對照 tag／commit：\n  `v0.3.0@{alternate}`",
             ),
         )
         self.assertIn("LEDGER_AUTHOR_MISMATCH", codes(self.validate()))
 
     def test_verification_ledger_checks_checksum_and_na_rules(self) -> None:
-        content = ledger().replace(
+        content = self.ledger().replace(
             "data_checksums = []",
             'data_checksums = ["sample=sha256:abc"]',
         )
@@ -468,7 +518,7 @@ class SourceCheckTests(unittest.TestCase):
 
         digest_a = "a" * 64
         digest_b = "b" * 64
-        content = ledger().replace(
+        content = self.ledger().replace(
             "data_checksums = []",
             "data_checksums = [\n"
             f'  "sample=sha256:{digest_a}",\n'
@@ -480,29 +530,27 @@ class SourceCheckTests(unittest.TestCase):
         self.assertIn("LEDGER_CHECKSUM_ID_DUPLICATE", found)
         self.assertIn("LEDGER_CHECKSUM_CONTRADICTION", found)
 
-        content = ledger().replace(
+        content = self.ledger().replace(
             'data_checksum_note = "不適用：這個測試不使用市場資料。"',
             'data_checksum_note = "沒有資料"',
         )
         self.fixture.write("verification/ledger.toml", content)
         self.assertIn("LEDGER_CHECKSUM_NA", codes(self.validate()))
 
-        content = ledger().replace(
+        content = self.ledger().replace(
             'interface_note = "使用已發布的訂單模型測試。"',
             'interface_note = "不適用：已有 schema。"',
         )
         self.fixture.write("verification/ledger.toml", content)
         self.assertIn("LEDGER_INTERFACE_CONTRADICTION", codes(self.validate()))
 
+        # 「不適用：」後面沒有具體原因 → 兩個 NA 規則都必須失敗。
+        # （helper 的 formal_entrypoints 本來就是 []，不需要再 replace。）
         content = (
-            ledger()
+            self.ledger()
             .replace(
                 'data_checksum_note = "不適用：這個測試不使用市場資料。"',
                 'data_checksum_note = "不適用："',
-            )
-            .replace(
-                'formal_entrypoints = ["pytest tests/unit/test_models_orders.py"]',
-                "formal_entrypoints = []",
             )
             .replace('schemas = ["quant.common.models.orders.Order"]', "schemas = []")
             .replace(
@@ -519,7 +567,7 @@ class SourceCheckTests(unittest.TestCase):
         self,
     ) -> None:
         content = (
-            ledger(result="needs-revalidation")
+            self.ledger(result="needs-revalidation")
             .replace(
                 'verification_commands = ["uv run pytest tests/unit/test_models_orders.py -q"]',
                 "verification_commands = []",
@@ -537,43 +585,48 @@ class SourceCheckTests(unittest.TestCase):
 
         self.fixture.write(
             "verification/ledger.toml",
-            ledger().replace(
+            self.ledger().replace(
                 "evidence_refs = [\n"
-                f'  "repo:emmet-qt-bt1@{FULL_SHA}:tests/unit/test_models_orders.py",\n'
+                '  "repo:emmet-qt-bt1:tests/unit/test_models_orders.py",\n'
                 "]",
                 "evidence_refs = []",
             ),
         )
         self.assertIn("LEDGER_EVIDENCE_REFS", codes(self.validate()))
 
-        self.fixture.write("manuscript/chapters/01.md", chapter(state="需重驗"))
+        # 需重驗的紀錄必須用 verified_against 記下最後一次通過的基線；
+        # 這是遷移期間唯一合法落後於 batch 基線的方式。
+        sha = self.fixture.sha
+        self.fixture.write("manuscript/chapters/01.md", self.chapter(state="需重驗"))
         self.fixture.write(
             "verification/ledger.toml",
-            ledger(state="需重驗", result="needs-revalidation"),
+            self.ledger(
+                state="需重驗",
+                result="needs-revalidation",
+                extra=f'verified_against = "v0.3.0@{sha}"\n',
+            ),
         )
         self.assertEqual([], [str(item) for item in self.validate()])
 
     def test_verification_ledger_validates_book_and_url_evidence(self) -> None:
-        repository_reference = (
-            f"repo:emmet-qt-bt1@{FULL_SHA}:tests/unit/test_models_orders.py"
-        )
+        repository_reference = "repo:emmet-qt-bt1:tests/unit/test_models_orders.py"
         self.fixture.write("docs/evidence.md", "# Evidence\n\n## Oracle\n")
         self.fixture.write("docs/evidence.txt", "not a fragment-aware format\n")
         self.fixture.write(
             "verification/ledger.toml",
-            ledger().replace(repository_reference, "book:docs/evidence.md#oracle"),
+            self.ledger().replace(repository_reference, "book:docs/evidence.md#oracle"),
         )
         self.assertEqual([], [str(item) for item in self.validate()])
 
         self.fixture.write(
             "verification/ledger.toml",
-            ledger().replace(repository_reference, "book:docs/evidence.md#missing"),
+            self.ledger().replace(repository_reference, "book:docs/evidence.md#missing"),
         )
         self.assertIn("LEDGER_EVIDENCE_FRAGMENT", codes(self.validate()))
 
         self.fixture.write(
             "verification/ledger.toml",
-            ledger().replace(repository_reference, "book:docs/evidence.txt#missing"),
+            self.ledger().replace(repository_reference, "book:docs/evidence.txt#missing"),
         )
         self.assertIn("LEDGER_EVIDENCE_FRAGMENT", codes(self.validate()))
 
@@ -588,15 +641,15 @@ class SourceCheckTests(unittest.TestCase):
         ):
             self.fixture.write(
                 "verification/ledger.toml",
-                ledger().replace(repository_reference, invalid),
+                self.ledger().replace(repository_reference, invalid),
             )
             self.assertIn("LEDGER_EVIDENCE", codes(self.validate()), invalid)
 
         for invalid_repository_path in (".git/config", "."):
-            invalid = f"repo:emmet-qt-bt1@{FULL_SHA}:{invalid_repository_path}"
+            invalid = f"repo:emmet-qt-bt1:{invalid_repository_path}"
             self.fixture.write(
                 "verification/ledger.toml",
-                ledger().replace(repository_reference, invalid),
+                self.ledger().replace(repository_reference, invalid),
             )
             self.assertIn("LEDGER_EVIDENCE", codes(self.validate()), invalid)
 
@@ -605,7 +658,7 @@ class SourceCheckTests(unittest.TestCase):
         for unavailable in ("book:.cache/ignored.md", "book:.git/config"):
             self.fixture.write(
                 "verification/ledger.toml",
-                ledger().replace(repository_reference, unavailable),
+                self.ledger().replace(repository_reference, unavailable),
             )
             self.assertIn(
                 "LEDGER_EVIDENCE_MISSING", codes(self.validate(git=True)), unavailable
@@ -617,39 +670,93 @@ class SourceCheckTests(unittest.TestCase):
         loop_b.symlink_to(loop_a)
         self.fixture.write(
             "verification/ledger.toml",
-            ledger().replace(repository_reference, "book:loop-a"),
+            self.ledger().replace(repository_reference, "book:loop-a"),
         )
         self.assertIn("LEDGER_EVIDENCE_MISSING", codes(self.validate(git=True)))
+
+    def test_ledger_conditional_fields_fail_closed(self) -> None:
+        sha = self.fixture.sha
+
+        self.fixture.write(
+            "verification/ledger.toml",
+            self.ledger(extra=f'verified_against = "v0.3.0@{sha}"\n'),
+        )
+        self.assertIn("LEDGER_OVERRIDE_FORBIDDEN", codes(self.validate()))
+
+        self.fixture.write("manuscript/chapters/01.md", self.chapter(state="需重驗"))
+        self.fixture.write(
+            "verification/ledger.toml",
+            self.ledger(state="需重驗", result="needs-revalidation"),
+        )
+        self.assertIn("LEDGER_OVERRIDE_MISSING", codes(self.validate()))
+
+        self.fixture.write("manuscript/chapters/01.md", self.chapter())
+        self.fixture.write(
+            "verification/ledger.toml",
+            self.ledger().replace("executable = true", "executable = false"),
+        )
+        self.assertIn("LEDGER_EXECUTABLE_NOTE_MISSING", codes(self.validate()))
+
+        self.fixture.write(
+            "verification/ledger.toml",
+            self.ledger(extra='executable_note = "不適用：x"\n'),
+        )
+        self.assertIn("LEDGER_EXECUTABLE_NOTE_FORBIDDEN", codes(self.validate()))
+
+    def test_ledger_batch_must_be_declared_and_evidence_must_exist(self) -> None:
+        self.fixture.write(
+            "verification/ledger.toml", self.ledger(batch="W2")
+        )
+        self.assertIn("LEDGER_BATCH_UNDECLARED", codes(self.validate()))
+
+        self.fixture.write(
+            "verification/ledger.toml",
+            self.ledger().replace(
+                "tests/unit/test_models_orders.py", "src/quant/does-not-exist.py"
+            ),
+        )
+        self.assertIn("LEDGER_EVIDENCE_MISSING", codes(self.validate()))
+
+    def test_moved_tag_fails_every_record_that_depends_on_it(self) -> None:
+        companion = self.fixture.companion
+        moved = companion.add_commit("src/quant/new.py", "# new\n")
+        companion.move_tag("v0.3.0", moved)
+
+        found = codes(self.validate())
+        # 根因報一次還不夠：靠這條基線的每一筆 record 都必須連帶失敗，
+        # 不能讓其餘紀錄在一個已知壞掉的基線上靜默通過。
+        self.assertIn("BASELINE_TAG_MISMATCH", found)
+        self.assertIn("LEDGER_BATCH_UNDECLARED", found)
 
     def test_verification_ledger_rejects_escaped_or_ignored_location(self) -> None:
         self.fixture.write(
             "verification/ledger.toml",
-            ledger(document="../outside.md"),
+            self.ledger(document="../outside.md"),
         )
         self.assertIn("LEDGER_DOCUMENT", codes(self.validate()))
 
         ledger_path = self.fixture.root / "verification/ledger.toml"
         ledger_path.unlink()
-        outside = self.fixture.write("outside-ledger.toml", ledger())
+        outside = self.fixture.write("outside-ledger.toml", self.ledger())
         ledger_path.symlink_to(outside)
         self.assertIn("LEDGER_SYMLINK", codes(self.validate()))
         ledger_path.unlink()
 
-        self.fixture.write("verification/ledger.toml", ledger())
+        self.fixture.write("verification/ledger.toml", self.ledger())
         self.fixture.init_git(ignore="/book/\n/verification/\n")
         self.assertIn("LEDGER_IGNORED", codes(self.validate(git=True)))
 
     def test_author_record_hidden_or_not_last_fails(self) -> None:
         path = "manuscript/chapters/01.md"
         hidden = (
-            chapter().replace("## 作者驗證紀錄", "<!--\n## 作者驗證紀錄").rstrip()
+            self.chapter().replace("## 作者驗證紀錄", "<!--\n## 作者驗證紀錄").rstrip()
             + "\n-->\n"
         )
         self.fixture.write(path, hidden)
         self.assertIn("VERIFY_SECTION_MISSING", codes(self.validate()))
 
         self.fixture.write(
-            path, chapter() + "\n## 後續正文\n\n不應出現在驗證紀錄後。\n"
+            path, self.chapter() + "\n## 後續正文\n\n不應出現在驗證紀錄後。\n"
         )
         self.assertIn("VERIFY_SECTION_NOT_LAST", codes(self.validate()))
 
@@ -657,7 +764,7 @@ class SourceCheckTests(unittest.TestCase):
         path = "manuscript/chapters/01.md"
         self.fixture.write(
             path,
-            chapter()
+            self.chapter()
             + '\n<script>alert(document.domain)</script>\n<a onclick="alert(1)">x</a>\n',
         )
         found = codes(self.validate())
@@ -668,7 +775,7 @@ class SourceCheckTests(unittest.TestCase):
         self.fixture.write("book-check.toml", '[metadata]\nrequired = ["preface.md"]\n')
         self.assertIn("CONFIG_METADATA_SCOPE", codes(self.validate()))
 
-        self.fixture.write("manuscript/chapters/02.MD", chapter("第二章"))
+        self.fixture.write("manuscript/chapters/02.MD", self.chapter("第二章"))
         self.fixture.write(
             "manuscript/SUMMARY.md",
             self.fixture.read("manuscript/SUMMARY.md")
@@ -792,11 +899,12 @@ class HtmlCheckTests(unittest.TestCase):
             '<!doctype html><html lang="zh-TW"><body id="序章">'
             '<h2 id="內容狀態">內容狀態</h2></body></html>',
         )
+        sha = self.fixture.sha
         self.fixture.write(
             "book/chapters/01.html",
             '<!doctype html><html lang="zh-TW"><body>'
-            "<p>emmet-qt-bt1 v0.3.0@c999965e5cc9 可操作 2026-07-12 "
-            f"v0.3.0@{FULL_SHA}</p>"
+            f"<p>emmet-qt-bt1 v0.3.0@{sha[:12]} 可操作 2026-07-12 "
+            f"v0.3.0@{sha}</p>"
             '<h2 id="小節">小節</h2>'
             '<h2 id="作者驗證紀錄">作者驗證紀錄</h2></body></html>',
         )
