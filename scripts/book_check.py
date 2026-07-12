@@ -517,73 +517,34 @@ def _metadata_patterns(
     return valid
 
 
-def _verification_ledger_path(
-    root: Path, config: dict, findings: list[Finding]
-) -> Path | None:
-    section = config.get("verification")
-    if not isinstance(section, dict):
-        findings.append(
-            Finding(
-                "CONFIG_LEDGER_SECTION",
-                "book-check.toml",
-                0,
-                "缺少 [verification] 台帳設定",
-            )
-        )
-        return None
-    configured = section.get("ledger")
-    if configured != VERIFICATION_LEDGER_PATH:
-        findings.append(
-            Finding(
-                "CONFIG_LEDGER_PATH",
-                "book-check.toml",
-                0,
-                f"verification.ledger 必須固定為 {VERIFICATION_LEDGER_PATH!r}",
-            )
-        )
-        return None
-    pure = PurePosixPath(configured)
-    if pure.is_absolute() or ".." in pure.parts:
-        findings.append(
-            Finding(
-                "CONFIG_LEDGER_PATH",
-                "book-check.toml",
-                0,
-                "台帳路徑必須留在 repository 內",
-            )
-        )
-        return None
-    path = root.joinpath(*pure.parts)
+def _verification_ledger_path(root: Path, findings: list[Finding]) -> Path | None:
+    """The ledger location is a constant, not a setting.
+
+    It used to be declared in `book-check.toml` and then checked against this
+    same constant, so the path-escape guards behind that check could never
+    fire. A config key with exactly one accepted value is not configuration.
+    """
+    path = root / "verification" / "ledger.toml"
     if _path_uses_symlink(path, root):
         findings.append(
             Finding(
                 "LEDGER_SYMLINK",
-                configured,
+                VERIFICATION_LEDGER_PATH,
                 0,
                 "驗證台帳不得使用 symlink",
             )
         )
         return None
-    try:
-        path.resolve(strict=False).relative_to(root.resolve())
-    except (OSError, RuntimeError, ValueError):
-        findings.append(
-            Finding(
-                "LEDGER_PATH_ESCAPE",
-                configured,
-                0,
-                "驗證台帳實際路徑逃出 repository",
-            )
-        )
-        return None
     if not path.is_file():
-        findings.append(Finding("LEDGER_MISSING", configured, 0, "找不到驗證台帳"))
+        findings.append(
+            Finding("LEDGER_MISSING", VERIFICATION_LEDGER_PATH, 0, "找不到驗證台帳")
+        )
         return None
     if not _case_exact(path, root):
         findings.append(
             Finding(
                 "LEDGER_PATH_CASE",
-                configured,
+                VERIFICATION_LEDGER_PATH,
                 0,
                 "台帳路徑大小寫與檔案系統不一致",
             )
@@ -2272,7 +2233,7 @@ def validate_source(
         "book-check.toml",
     )
     patterns = _metadata_patterns(root, findings, check_config)
-    ledger_path = _verification_ledger_path(root, check_config, findings)
+    ledger_path = _verification_ledger_path(root, findings)
     if ledger_path is not None and companion is None:
         companion, _ = _resolve_companion(root)
         if companion is None:

@@ -144,9 +144,6 @@ create-missing = false
             "book-check.toml",
             """[metadata]
 required = ["chapters/*.md"]
-
-[verification]
-ledger = "verification/ledger.toml"
 """,
         )
         self.write(

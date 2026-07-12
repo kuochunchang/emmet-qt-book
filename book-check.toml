@@ -6,7 +6,5 @@ required = [
   "front-matter/setup.md",
 ]
 
-[verification]
-# W1 起所有作者驗證 claim 只維護在這個結構化台帳；checker 會自動要求
-# metadata scope 內的每份書稿至少有一筆紀錄。
-ledger = "verification/ledger.toml"
+# 作者驗證台帳固定在 verification/ledger.toml，不開放設定：checker 只接受
+# 這一個位置，metadata scope 內的每份書稿都必須在其中至少有一筆紀錄。
