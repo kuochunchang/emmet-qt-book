@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,48 @@ from scripts.book_check import (
 
 
 FULL_SHA = "c999965e5cc923281541409cda9502beb93b8a60"
+
+
+class CompanionFixture:
+    """Synthetic emmet-qt-bt1: a real git repository for tier-2 checks."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.git("init", "--initial-branch=main")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Test")
+        self.git("config", "commit.gpgsign", "false")
+        self.write("tests/unit/test_models_orders.py", "# orders test\n")
+        self.write("src/quant/common/models/orders.py", "# orders\n")
+        self.git("add", "-A")
+        self.git("commit", "-m", "baseline")
+        self.commit = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("tag", "v0.3.0")
+
+    def git(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(self.root), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+
+    def write(self, relative: str, content: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def add_commit(self, relative: str, content: str) -> str:
+        self.write(relative, content)
+        self.git("add", "-A")
+        self.git("commit", "-m", f"add {relative}")
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
+    def move_tag(self, tag: str, commit: str) -> None:
+        self.git("tag", "-f", tag, commit)
 
 
 def chapter(title: str = "第一章", state: str = "可操作") -> str:
@@ -73,7 +116,10 @@ revalidation_triggers = ["訂單模型、測試或基線改變"]
 class Fixture:
     def __init__(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.base = Path(self.temporary.name).resolve()
+        self.root = self.base / "book-repo"
+        self.root.mkdir()
+        self.companion = CompanionFixture(self.base / "emmet-qt-bt1")
         self.write(
             "book.toml",
             """[book]
@@ -159,6 +205,32 @@ class SourceCheckTests(unittest.TestCase):
 
     def validate(self, *, git: bool = False):
         return validate_source(self.fixture.root, check_git=git)
+
+    def test_companion_is_resolved_from_the_sibling_directory(self) -> None:
+        from scripts.book_check import _resolve_companion
+
+        companion, error = _resolve_companion(self.fixture.root)
+        self.assertIsNone(error)
+        self.assertEqual(self.fixture.companion.root, companion)
+
+    def test_companion_missing_is_reported(self) -> None:
+        from scripts.book_check import _resolve_companion
+
+        shutil.rmtree(self.fixture.companion.root)
+        companion, error = _resolve_companion(self.fixture.root)
+        self.assertIsNone(companion)
+        self.assertEqual("COMPANION_MISSING", error)
+
+    def test_companion_env_override_must_be_a_git_repository(self) -> None:
+        from scripts.book_check import _resolve_companion
+
+        plain = self.fixture.base / "not-a-repo"
+        plain.mkdir()
+        os.environ["EMMET_QT_BT1_DIR"] = str(plain)
+        self.addCleanup(os.environ.pop, "EMMET_QT_BT1_DIR", None)
+        companion, error = _resolve_companion(self.fixture.root)
+        self.assertIsNone(companion)
+        self.assertEqual("COMPANION_NOT_GIT", error)
 
     def test_minimal_valid_book_passes_and_fenced_template_is_ignored(self) -> None:
         path = "manuscript/chapters/01.md"

@@ -55,6 +55,8 @@ FORBIDDEN_RAW_HTML_TAGS = {
 }
 OUTPUT_MARKER = ".emmet-book-output"
 OUTPUT_MARKER_CONTENT = "emmet-qt-book book-check v1\n"
+COMPANION_REPO = "emmet-qt-bt1"
+COMPANION_ENV = "EMMET_QT_BT1_DIR"
 VERIFICATION_LEDGER_PATH = "verification/ledger.toml"
 LEDGER_SCHEMA_VERSION = 1
 LEDGER_RESULT_VALUES = {"pass", "needs-revalidation"}
@@ -1707,6 +1709,22 @@ def _git_command(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _resolve_companion(root: Path) -> tuple[Path | None, str | None]:
+    """Locate the pinned companion repository.
+
+    Read-only: callers may only run `rev-parse` and `cat-file` against it.
+    An explicit `$EMMET_QT_BT1_DIR` never falls back to the sibling default;
+    a typo must fail rather than silently downgrade to another repository.
+    """
+    override = os.environ.get(COMPANION_ENV)
+    candidate = Path(override) if override else root.parent / COMPANION_REPO
+    if not candidate.is_dir():
+        return None, "COMPANION_MISSING"
+    if _git_command(candidate, "rev-parse", "--git-common-dir").returncode != 0:
+        return None, "COMPANION_NOT_GIT"
+    return candidate.resolve(), None
+
+
 def _repository_files(root: Path) -> list[Path]:
     listed = _git_command(
         root,
@@ -2057,7 +2075,9 @@ def _validate_git_paths(
             )
 
 
-def validate_source(root: Path, *, check_git: bool = True) -> list[Finding]:
+def validate_source(
+    root: Path, *, check_git: bool = True, companion: Path | None = None
+) -> list[Finding]:
     root = root.resolve()
     findings: list[Finding] = []
     source_root, output_root = _validate_book_config(root, findings)
@@ -2069,6 +2089,18 @@ def validate_source(root: Path, *, check_git: bool = True) -> list[Finding]:
     )
     patterns = _metadata_patterns(root, findings, check_config)
     ledger_path = _verification_ledger_path(root, check_config, findings)
+    if ledger_path is not None and companion is None:
+        companion, _ = _resolve_companion(root)
+        if companion is None:
+            findings.append(
+                Finding(
+                    "COMPANION_MISSING",
+                    VERIFICATION_LEDGER_PATH,
+                    0,
+                    "找不到配套 repo；台帳身分驗證無法執行",
+                )
+            )
+            ledger_path = None
     findings.extend(validate_repository_markdown_links(root))
     summary = source_root / "SUMMARY.md"
     summary_display = summary.relative_to(root).as_posix()
@@ -2813,10 +2845,31 @@ def _mdbook_version(mdbook: Path) -> str | None:
     return result.stdout.strip()
 
 
-def run(root: Path, mdbook: Path) -> int:
+def run(root: Path, mdbook: Path, companion: Path | None = None) -> int:
     root = root.resolve()
     print(f"Python {sys.version.split()[0]}")
-    source_findings = validate_source(root)
+
+    error: str | None = None
+    if companion is None:
+        companion, error = _resolve_companion(root)
+    if companion is None:
+        if error == "COMPANION_NOT_GIT":
+            print(
+                f"COMPANION_NOT_GIT ${COMPANION_ENV} 指向的路徑不是 git repository",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"COMPANION_MISSING 找不到配套 repo"
+                f"（試過 ${COMPANION_ENV}、{root.parent / COMPANION_REPO}）\n"
+                "台帳身分驗證無法執行；先依 manuscript/front-matter/setup.md "
+                "建立隔離 worktree。",
+                file=sys.stderr,
+            )
+        return 2
+    print(f"companion: {companion}")
+
+    source_findings = validate_source(root, companion=companion)
     if source_findings:
         _print_findings(source_findings)
         return 1
@@ -2888,8 +2941,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--mdbook", type=Path, required=True)
+    parser.add_argument("--companion", type=Path, default=None)
     arguments = parser.parse_args()
-    return run(arguments.root, arguments.mdbook)
+    return run(arguments.root, arguments.mdbook, arguments.companion)
 
 
 if __name__ == "__main__":
