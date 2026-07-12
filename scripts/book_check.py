@@ -55,6 +55,46 @@ FORBIDDEN_RAW_HTML_TAGS = {
 }
 OUTPUT_MARKER = ".emmet-book-output"
 OUTPUT_MARKER_CONTENT = "emmet-qt-book book-check v1\n"
+VERIFICATION_LEDGER_PATH = "verification/ledger.toml"
+LEDGER_SCHEMA_VERSION = 1
+LEDGER_RESULT_VALUES = {"pass", "needs-revalidation"}
+LEDGER_RECORD_FIELDS = {
+    "id",
+    "batch",
+    "document",
+    "chapter",
+    "claim",
+    "content_state",
+    "tag_commit",
+    "full_commit",
+    "data_checksums",
+    "data_checksum_note",
+    "formal_entrypoints",
+    "schemas",
+    "interface_note",
+    "evidence_refs",
+    "verification_commands",
+    "oracle",
+    "result",
+    "observed",
+    "known_differences",
+    "verified_on",
+    "revalidation_triggers",
+}
+LEDGER_LIST_FIELDS = {
+    "data_checksums",
+    "formal_entrypoints",
+    "schemas",
+    "evidence_refs",
+    "verification_commands",
+    "known_differences",
+    "revalidation_triggers",
+}
+LEDGER_STRING_FIELDS = LEDGER_RECORD_FIELDS - LEDGER_LIST_FIELDS
+LEDGER_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+LEDGER_TAG_COMMIT_RE = re.compile(r"^([^@\s]+)@([0-9a-f]{40})$")
+LEDGER_DATA_CHECKSUM_RE = re.compile(r"^([^=\s]+)=sha256:([0-9a-f]{64})$")
+LEDGER_EVIDENCE_REF_RE = re.compile(r"^repo:emmet-qt-bt1@([0-9a-f]{40}):([^\x00]+)$")
 
 
 class Finding:
@@ -89,11 +129,24 @@ def _read_text(
         return None
 
 
+def _path_uses_symlink(path: Path, boundary: Path) -> bool:
+    try:
+        relative = path.relative_to(boundary)
+    except ValueError:
+        return True
+    cursor = boundary
+    for part in relative.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            return True
+    return False
+
+
 def _load_toml(path: Path, code: str, findings: list[Finding], display: str) -> dict:
     try:
         with path.open("rb") as handle:
             value = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
         findings.append(Finding(code, display, 0, str(error)))
         return {}
     if not isinstance(value, dict):
@@ -391,13 +444,16 @@ def _validate_book_config(root: Path, findings: list[Finding]) -> tuple[Path, Pa
     return root / "manuscript", root / "book"
 
 
-def _metadata_patterns(root: Path, findings: list[Finding]) -> list[str]:
-    config = _load_toml(
-        root / "book-check.toml",
-        "CONFIG_CHECK",
-        findings,
-        "book-check.toml",
-    )
+def _metadata_patterns(
+    root: Path, findings: list[Finding], config: dict | None = None
+) -> list[str]:
+    if config is None:
+        config = _load_toml(
+            root / "book-check.toml",
+            "CONFIG_CHECK",
+            findings,
+            "book-check.toml",
+        )
     metadata = config.get("metadata")
     if not isinstance(metadata, dict):
         findings.append(
@@ -446,6 +502,80 @@ def _metadata_patterns(root: Path, findings: list[Finding]) -> list[str]:
                 )
             )
     return valid
+
+
+def _verification_ledger_path(
+    root: Path, config: dict, findings: list[Finding]
+) -> Path | None:
+    section = config.get("verification")
+    if not isinstance(section, dict):
+        findings.append(
+            Finding(
+                "CONFIG_LEDGER_SECTION",
+                "book-check.toml",
+                0,
+                "缺少 [verification] 台帳設定",
+            )
+        )
+        return None
+    configured = section.get("ledger")
+    if configured != VERIFICATION_LEDGER_PATH:
+        findings.append(
+            Finding(
+                "CONFIG_LEDGER_PATH",
+                "book-check.toml",
+                0,
+                f"verification.ledger 必須固定為 {VERIFICATION_LEDGER_PATH!r}",
+            )
+        )
+        return None
+    pure = PurePosixPath(configured)
+    if pure.is_absolute() or ".." in pure.parts:
+        findings.append(
+            Finding(
+                "CONFIG_LEDGER_PATH",
+                "book-check.toml",
+                0,
+                "台帳路徑必須留在 repository 內",
+            )
+        )
+        return None
+    path = root.joinpath(*pure.parts)
+    if _path_uses_symlink(path, root):
+        findings.append(
+            Finding(
+                "LEDGER_SYMLINK",
+                configured,
+                0,
+                "驗證台帳不得使用 symlink",
+            )
+        )
+        return None
+    try:
+        path.resolve(strict=False).relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        findings.append(
+            Finding(
+                "LEDGER_PATH_ESCAPE",
+                configured,
+                0,
+                "驗證台帳實際路徑逃出 repository",
+            )
+        )
+        return None
+    if not path.is_file():
+        findings.append(Finding("LEDGER_MISSING", configured, 0, "找不到驗證台帳"))
+        return None
+    if not _case_exact(path, root):
+        findings.append(
+            Finding(
+                "LEDGER_PATH_CASE",
+                configured,
+                0,
+                "台帳路徑大小寫與檔案系統不一致",
+            )
+        )
+    return path
 
 
 def _summary_links(
@@ -749,6 +879,820 @@ def _validate_author_record(
                     display,
                     fields[name][0][0],
                     f"「{name}」不得為空",
+                )
+            )
+
+
+def _author_record_field_content(
+    visible: list[tuple[int, str]], name: str
+) -> str | None:
+    starts = [
+        index
+        for index, (_, line) in enumerate(visible)
+        if re.fullmatch(r"##\s+作者驗證紀錄\s*", line)
+    ]
+    if len(starts) != 1:
+        return None
+    section = visible[starts[0] + 1 :]
+    for index, (_, line) in enumerate(section):
+        if re.match(r"^#{1,6}\s+", line):
+            break
+        field_match = re.match(r"^-\s+([^：]+)：\s*(.*)$", line)
+        if field_match is None or field_match.group(1) != name:
+            continue
+        pieces = [field_match.group(2)]
+        for _, continuation in section[index + 1 :]:
+            if re.match(r"^#{1,6}\s+", continuation) or re.match(
+                r"^-\s+[^：]+：", continuation
+            ):
+                break
+            if continuation.strip():
+                pieces.append(continuation.strip())
+        return "\n".join(piece for piece in pieces if piece).strip()
+    return None
+
+
+def _ledger_document_claims(
+    text: str,
+) -> tuple[
+    str | None, str | None, str | None, tuple[str, str] | None, tuple[str, str] | None
+]:
+    visible = visible_markdown_lines(text)
+    title = next(
+        (
+            _plain_title(match.group(1))
+            for _, line in visible
+            if (match := re.match(r"^#\s+(.+?)\s*$", line))
+        ),
+        None,
+    )
+    metadata: dict[str, str] = {}
+    for _, line in visible:
+        match = METADATA_RE.match(line)
+        if match and match.group(1) not in metadata:
+            metadata[match.group(1)] = match.group(2).replace("`", "")
+
+    header_identity: tuple[str, str] | None = None
+    baseline = metadata.get("配套基線")
+    if baseline:
+        match = re.fullmatch(r"emmet-qt-bt1\s+([^@\s]+)@([0-9a-f]{12,40})", baseline)
+        if match:
+            header_identity = (match.group(1), match.group(2))
+
+    author_identity: tuple[str, str] | None = None
+    author_baseline = _author_record_field_content(visible, "對照 tag／commit")
+    if author_baseline is not None:
+        baseline_match = VERIFICATION_BASELINE_RE.search(author_baseline)
+        if baseline_match:
+            author_identity = (baseline_match.group(1), baseline_match.group(2))
+
+    return (
+        title,
+        metadata.get("內容狀態"),
+        metadata.get("最後驗證日期"),
+        header_identity,
+        author_identity,
+    )
+
+
+def _validate_ledger_evidence_ref(
+    root: Path,
+    reference: str,
+    expected_commit: str | None,
+    repository_files: set[Path],
+    display: str,
+    record_id: str,
+    findings: list[Finding],
+) -> None:
+    repository_match = LEDGER_EVIDENCE_REF_RE.fullmatch(reference)
+    if repository_match:
+        commit, raw_path = repository_match.groups()
+        pure = PurePosixPath(raw_path)
+        if (
+            pure.is_absolute()
+            or ".." in pure.parts
+            or not pure.parts
+            or raw_path != raw_path.strip()
+            or any(
+                ord(character) < 32 or ord(character) == 127 for character in raw_path
+            )
+            or pure.parts[0]
+            in {".git", ".cache", ".venv", "book", "dist", "site", "node_modules"}
+        ):
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 repository evidence path 非法：{reference!r}",
+                )
+            )
+        if expected_commit is not None and commit != expected_commit:
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE_COMMIT",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 evidence commit 與 full_commit 不一致",
+                )
+            )
+        return
+
+    if reference.startswith("url:"):
+        raw_url = reference[4:]
+        if any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in raw_url
+        ) or re.search(r"%(?![0-9A-Fa-f]{2})", raw_url):
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 URL evidence 非法：{reference!r}",
+                )
+            )
+            return
+        try:
+            parsed = urlsplit(raw_url)
+            hostname = parsed.hostname
+            parsed.port
+        except ValueError:
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 URL evidence 非法：{reference!r}",
+                )
+            )
+            return
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 URL evidence 非法：{reference!r}",
+                )
+            )
+        return
+
+    if reference.startswith("book:"):
+        raw_book_reference = reference[5:]
+        if any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in raw_book_reference
+        ) or re.search(r"%(?![0-9A-Fa-f]{2})", raw_book_reference):
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 book evidence path 非法：{reference!r}",
+                )
+            )
+            return
+        try:
+            parsed = urlsplit(raw_book_reference)
+        except ValueError:
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 book evidence path 非法：{reference!r}",
+                )
+            )
+            return
+        pure = PurePosixPath(unquote(parsed.path))
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or pure.is_absolute()
+            or ".." in pure.parts
+            or not pure.parts
+        ):
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE",
+                    display,
+                    0,
+                    f"record {record_id!r} 的 book evidence path 非法：{reference!r}",
+                )
+            )
+            return
+        target = root.joinpath(*pure.parts)
+        if _path_uses_symlink(target, root):
+            target_inside = False
+        else:
+            try:
+                target.resolve(strict=False).relative_to(root.resolve())
+                target_inside = True
+            except (OSError, RuntimeError, ValueError):
+                target_inside = False
+        if (
+            not target_inside
+            or not target.is_file()
+            or not _case_exact(target, root)
+            or target not in repository_files
+            or target.relative_to(root).as_posix() == VERIFICATION_LEDGER_PATH
+        ):
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE_MISSING",
+                    display,
+                    0,
+                    f"record {record_id!r} 找不到 book evidence：{reference!r}",
+                )
+            )
+            return
+        if parsed.fragment:
+            if target.suffix.casefold() != ".md" or unquote(
+                parsed.fragment
+            ) not in _markdown_heading_ids(target):
+                findings.append(
+                    Finding(
+                        "LEDGER_EVIDENCE_FRAGMENT",
+                        display,
+                        0,
+                        f"record {record_id!r} 找不到 book evidence fragment：{reference!r}",
+                    )
+                )
+        return
+
+    findings.append(
+        Finding(
+            "LEDGER_EVIDENCE",
+            display,
+            0,
+            f"record {record_id!r} 的 evidence 必須使用 repo:、book: 或 url: 格式",
+        )
+    )
+
+
+def _validate_verification_ledger(
+    root: Path,
+    ledger_path: Path,
+    required_documents: set[Path],
+    texts: dict[Path, str],
+    states: set[str],
+    findings: list[Finding],
+    *,
+    check_git: bool,
+) -> None:
+    display = ledger_path.relative_to(root).as_posix()
+    ledger = _load_toml(ledger_path, "LEDGER_PARSE", findings, display)
+    repository_files = set(_repository_files(root))
+    unknown_top_level = set(ledger) - {"schema_version", "records"}
+    if unknown_top_level:
+        findings.append(
+            Finding(
+                "LEDGER_SCHEMA",
+                display,
+                0,
+                f"未知的台帳根欄位：{', '.join(sorted(unknown_top_level))}",
+            )
+        )
+    version = ledger.get("schema_version")
+    if type(version) is not int or version != LEDGER_SCHEMA_VERSION:
+        findings.append(
+            Finding(
+                "LEDGER_SCHEMA_VERSION",
+                display,
+                0,
+                f"schema_version 必須是 {LEDGER_SCHEMA_VERSION}",
+            )
+        )
+    records = ledger.get("records")
+    if not isinstance(records, list) or not records:
+        findings.append(
+            Finding("LEDGER_RECORDS", display, 0, "records 必須是非空 table array")
+        )
+        records = []
+
+    seen_ids: set[str] = set()
+    seen_claims: set[tuple[str, str]] = set()
+    covered_documents: set[Path] = set()
+    needs_revalidation_documents: set[Path] = set()
+    for index, raw_record in enumerate(records, start=1):
+        label = f"record #{index}"
+        if not isinstance(raw_record, dict):
+            findings.append(
+                Finding("LEDGER_RECORD", display, 0, f"{label} 必須是 table")
+            )
+            continue
+        record = raw_record
+        identifier_value = record.get("id")
+        if isinstance(identifier_value, str) and identifier_value.strip():
+            label = f"record {identifier_value!r}"
+        missing_fields = LEDGER_RECORD_FIELDS - set(record)
+        unknown_fields = set(record) - LEDGER_RECORD_FIELDS
+        if missing_fields:
+            findings.append(
+                Finding(
+                    "LEDGER_FIELD_MISSING",
+                    display,
+                    0,
+                    f"{label} 缺少欄位：{', '.join(sorted(missing_fields))}",
+                )
+            )
+        if unknown_fields:
+            findings.append(
+                Finding(
+                    "LEDGER_FIELD_UNKNOWN",
+                    display,
+                    0,
+                    f"{label} 有未知欄位：{', '.join(sorted(unknown_fields))}",
+                )
+            )
+
+        strings: dict[str, str] = {}
+        for field in sorted(LEDGER_STRING_FIELDS):
+            if field not in record:
+                continue
+            value = record.get(field)
+            if not isinstance(value, str) or not value.strip():
+                findings.append(
+                    Finding(
+                        "LEDGER_FIELD_TYPE",
+                        display,
+                        0,
+                        f"{label} 的 {field} 必須是非空字串",
+                    )
+                )
+                continue
+            strings[field] = value.strip()
+            if PLACEHOLDER_RE.search(value):
+                findings.append(
+                    Finding(
+                        "LEDGER_PLACEHOLDER",
+                        display,
+                        0,
+                        f"{label} 的 {field} 不得使用 placeholder",
+                    )
+                )
+
+        lists: dict[str, list[str]] = {}
+        for field in sorted(LEDGER_LIST_FIELDS):
+            if field not in record:
+                continue
+            value = record.get(field)
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) or not item.strip() for item in value
+            ):
+                findings.append(
+                    Finding(
+                        "LEDGER_FIELD_TYPE",
+                        display,
+                        0,
+                        f"{label} 的 {field} 必須是字串陣列",
+                    )
+                )
+                continue
+            cleaned = [item.strip() for item in value]
+            lists[field] = cleaned
+            if len(cleaned) != len(set(cleaned)):
+                findings.append(
+                    Finding(
+                        "LEDGER_LIST_DUPLICATE",
+                        display,
+                        0,
+                        f"{label} 的 {field} 不得重複",
+                    )
+                )
+            if any(PLACEHOLDER_RE.search(item) for item in cleaned):
+                findings.append(
+                    Finding(
+                        "LEDGER_PLACEHOLDER",
+                        display,
+                        0,
+                        f"{label} 的 {field} 不得使用 placeholder",
+                    )
+                )
+
+        record_id = strings.get("id")
+        if record_id is not None:
+            if not LEDGER_ID_RE.fullmatch(record_id):
+                findings.append(
+                    Finding(
+                        "LEDGER_ID",
+                        display,
+                        0,
+                        f"{label} 的 id 必須是小寫 kebab-case",
+                    )
+                )
+            if record_id in seen_ids:
+                findings.append(
+                    Finding(
+                        "LEDGER_ID_DUPLICATE",
+                        display,
+                        0,
+                        f"重複的 record id：{record_id}",
+                    )
+                )
+            seen_ids.add(record_id)
+        record_label = record_id or f"#{index}"
+
+        claim_document = strings.get("document")
+        claim_text = strings.get("claim")
+        if claim_document is not None and claim_text is not None:
+            claim_key = (PurePosixPath(claim_document).as_posix(), claim_text)
+            if claim_key in seen_claims:
+                findings.append(
+                    Finding(
+                        "LEDGER_CLAIM_DUPLICATE",
+                        display,
+                        0,
+                        f"record {record_label!r} 重複同一 document 的 claim",
+                    )
+                )
+            seen_claims.add(claim_key)
+
+        batch = strings.get("batch")
+        if batch is not None and not re.fullmatch(r"W[1-9][0-9]*", batch):
+            findings.append(
+                Finding(
+                    "LEDGER_BATCH",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 batch 必須使用 W<number>",
+                )
+            )
+
+        full_commit = strings.get("full_commit")
+        if full_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", full_commit):
+            findings.append(
+                Finding(
+                    "LEDGER_COMMIT",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 full_commit 必須是完整 40 字元 SHA",
+                )
+            )
+            full_commit = None
+        tag_identity: tuple[str, str] | None = None
+        tag_commit = strings.get("tag_commit")
+        if tag_commit is not None:
+            match = LEDGER_TAG_COMMIT_RE.fullmatch(tag_commit)
+            if match is None:
+                findings.append(
+                    Finding(
+                        "LEDGER_BASELINE",
+                        display,
+                        0,
+                        f"record {record_label!r} 的 tag_commit 必須包含 tag 與完整 SHA",
+                    )
+                )
+            else:
+                tag_identity = (match.group(1), match.group(2))
+                if full_commit is not None and match.group(2) != full_commit:
+                    findings.append(
+                        Finding(
+                            "LEDGER_BASELINE_MISMATCH",
+                            display,
+                            0,
+                            f"record {record_label!r} 的 tag_commit 與 full_commit 不一致",
+                        )
+                    )
+
+        state = strings.get("content_state")
+        if state is not None and state not in states:
+            findings.append(
+                Finding(
+                    "LEDGER_STATE",
+                    display,
+                    0,
+                    f"record {record_label!r} 使用未知內容狀態：{state}",
+                )
+            )
+
+        result = strings.get("result")
+        if result is not None and result not in LEDGER_RESULT_VALUES:
+            findings.append(
+                Finding(
+                    "LEDGER_RESULT",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 result 必須是 pass 或 needs-revalidation",
+                )
+            )
+        if result == "needs-revalidation" and state != "需重驗":
+            findings.append(
+                Finding(
+                    "LEDGER_REVALIDATION_STATE",
+                    display,
+                    0,
+                    f"record {record_label!r} 只有「需重驗」文件可標 needs-revalidation",
+                )
+            )
+
+        verified_on = strings.get("verified_on")
+        if verified_on is not None:
+            try:
+                parsed_date = dt.date.fromisoformat(verified_on)
+                if parsed_date.isoformat() != verified_on:
+                    raise ValueError
+            except ValueError:
+                findings.append(
+                    Finding(
+                        "LEDGER_DATE",
+                        display,
+                        0,
+                        f"record {record_label!r} 的 verified_on 必須是 YYYY-MM-DD",
+                    )
+                )
+
+        checksums = lists.get("data_checksums")
+        checksum_ids: set[str] = set()
+        if checksums is not None:
+            for checksum in checksums:
+                checksum_match = LEDGER_DATA_CHECKSUM_RE.fullmatch(checksum)
+                if checksum_match is None:
+                    findings.append(
+                        Finding(
+                            "LEDGER_CHECKSUM",
+                            display,
+                            0,
+                            f"record {record_label!r} 的 checksum 必須是 <logical-id>=sha256:<64 hex>",
+                        )
+                    )
+                    continue
+                logical_id = checksum_match.group(1)
+                if logical_id in checksum_ids:
+                    findings.append(
+                        Finding(
+                            "LEDGER_CHECKSUM_ID_DUPLICATE",
+                            display,
+                            0,
+                            f"record {record_label!r} 的 data logical-id 不得重複：{logical_id}",
+                        )
+                    )
+                checksum_ids.add(logical_id)
+        checksum_note = strings.get("data_checksum_note")
+        if checksum_note is not None and checksums is not None:
+            checksum_na = checksum_note.startswith("不適用：")
+            checksum_na_reason = checksum_note.removeprefix("不適用：").strip()
+            if not checksums and (not checksum_na or not checksum_na_reason):
+                findings.append(
+                    Finding(
+                        "LEDGER_CHECKSUM_NA",
+                        display,
+                        0,
+                        f"record {record_label!r} 無資料輸入時須以「不適用：」說明具體原因",
+                    )
+                )
+            if checksums and checksum_na:
+                findings.append(
+                    Finding(
+                        "LEDGER_CHECKSUM_CONTRADICTION",
+                        display,
+                        0,
+                        f"record {record_label!r} 已列 checksum，不得同時標示不適用",
+                    )
+                )
+
+        entrypoints = lists.get("formal_entrypoints", [])
+        schemas = lists.get("schemas", [])
+        interface_note = strings.get("interface_note")
+        if (
+            interface_note is not None
+            and "formal_entrypoints" in lists
+            and "schemas" in lists
+        ):
+            interface_na = interface_note.startswith("不適用：")
+            interface_na_reason = interface_note.removeprefix("不適用：").strip()
+            if (
+                not entrypoints
+                and not schemas
+                and (not interface_na or not interface_na_reason)
+            ):
+                findings.append(
+                    Finding(
+                        "LEDGER_INTERFACE_NA",
+                        display,
+                        0,
+                        f"record {record_label!r} 無正式入口／schema 時須以「不適用：」說明具體原因",
+                    )
+                )
+            if (entrypoints or schemas) and interface_na:
+                findings.append(
+                    Finding(
+                        "LEDGER_INTERFACE_CONTRADICTION",
+                        display,
+                        0,
+                        f"record {record_label!r} 已列正式入口／schema，不得同時標示不適用",
+                    )
+                )
+        if "verification_commands" in lists and not lists["verification_commands"]:
+            findings.append(
+                Finding(
+                    "LEDGER_COMMANDS",
+                    display,
+                    0,
+                    f"record {record_label!r} 至少需要一個驗證命令",
+                )
+            )
+        if "evidence_refs" in lists and not lists["evidence_refs"]:
+            findings.append(
+                Finding(
+                    "LEDGER_EVIDENCE_REFS",
+                    display,
+                    0,
+                    f"record {record_label!r} 至少需要一個可追溯 evidence ref",
+                )
+            )
+        if "revalidation_triggers" in lists and not lists["revalidation_triggers"]:
+            findings.append(
+                Finding(
+                    "LEDGER_REVALIDATION_TRIGGERS",
+                    display,
+                    0,
+                    f"record {record_label!r} 至少需要一個重驗觸發原因",
+                )
+            )
+        for reference in lists.get("evidence_refs", []):
+            _validate_ledger_evidence_ref(
+                root,
+                reference,
+                full_commit,
+                repository_files,
+                display,
+                record_label,
+                findings,
+            )
+
+        document_value = strings.get("document")
+        if document_value is None:
+            continue
+        pure_document = PurePosixPath(document_value)
+        if (
+            pure_document.is_absolute()
+            or ".." in pure_document.parts
+            or not pure_document.parts
+            or pure_document.parts[0] != "manuscript"
+            or pure_document.suffix != ".md"
+            or pure_document.as_posix() != document_value
+        ):
+            findings.append(
+                Finding(
+                    "LEDGER_DOCUMENT",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 document 必須是 manuscript 內的小寫 .md 路徑",
+                )
+            )
+            continue
+        document = root.joinpath(*pure_document.parts)
+        try:
+            document.resolve(strict=False).relative_to(root.resolve())
+        except (OSError, RuntimeError, ValueError):
+            findings.append(
+                Finding(
+                    "LEDGER_DOCUMENT",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 document 逃出 repository",
+                )
+            )
+            continue
+        if (
+            _path_uses_symlink(document, root)
+            or not document.is_file()
+            or not _case_exact(document, root)
+        ):
+            findings.append(
+                Finding(
+                    "LEDGER_DOCUMENT_MISSING",
+                    display,
+                    0,
+                    f"record {record_label!r} 找不到 document：{document_value}",
+                )
+            )
+            continue
+        if document not in required_documents:
+            findings.append(
+                Finding(
+                    "LEDGER_DOCUMENT_SCOPE",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 document 不在 metadata 驗證範圍",
+                )
+            )
+            continue
+        covered_documents.add(document)
+        if result == "needs-revalidation":
+            needs_revalidation_documents.add(document)
+
+        document_text = texts.get(document)
+        if document_text is None:
+            document_text = _read_text(
+                document,
+                "LEDGER_DOCUMENT_READ",
+                findings,
+                document_value,
+            )
+            if document_text is None:
+                continue
+            texts[document] = document_text
+        title, doc_state, doc_date, header_identity, author_identity = (
+            _ledger_document_claims(document_text)
+        )
+        chapter = strings.get("chapter")
+        if chapter is not None and title is not None and chapter != title:
+            findings.append(
+                Finding(
+                    "LEDGER_CHAPTER",
+                    display,
+                    0,
+                    f"record {record_label!r} 的 chapter 與文件 H1 不一致",
+                )
+            )
+        if state is not None and doc_state is not None and state != doc_state:
+            findings.append(
+                Finding(
+                    "LEDGER_STATE_MISMATCH",
+                    display,
+                    0,
+                    f"record {record_label!r} 的內容狀態與章首不一致",
+                )
+            )
+        if verified_on is not None and doc_date is not None and verified_on != doc_date:
+            findings.append(
+                Finding(
+                    "LEDGER_DATE_MISMATCH",
+                    display,
+                    0,
+                    f"record {record_label!r} 的日期與章首最後驗證日期不一致",
+                )
+            )
+        if tag_identity is not None and header_identity is not None:
+            tag, commit = tag_identity
+            header_tag, header_commit = header_identity
+            if tag != header_tag or not commit.startswith(header_commit):
+                findings.append(
+                    Finding(
+                        "LEDGER_BASELINE_MISMATCH",
+                        display,
+                        0,
+                        f"record {record_label!r} 的 tag_commit 與章首不一致",
+                    )
+                )
+        if tag_identity is not None and author_identity is not None:
+            if tag_identity != author_identity:
+                findings.append(
+                    Finding(
+                        "LEDGER_AUTHOR_MISMATCH",
+                        display,
+                        0,
+                        f"record {record_label!r} 的 tag_commit 與章末作者紀錄不一致",
+                    )
+                )
+
+    for missing in sorted(
+        required_documents - covered_documents, key=lambda item: item.as_posix()
+    ):
+        findings.append(
+            Finding(
+                "LEDGER_COVERAGE",
+                display,
+                0,
+                f"缺少文件台帳紀錄：{missing.relative_to(root).as_posix()}",
+            )
+        )
+    for document in required_documents:
+        text = texts.get(document)
+        if text is None:
+            continue
+        _, document_state, _, _, _ = _ledger_document_claims(text)
+        if document_state == "需重驗" and document not in needs_revalidation_documents:
+            findings.append(
+                Finding(
+                    "LEDGER_REVALIDATION_COVERAGE",
+                    display,
+                    0,
+                    f"需重驗文件缺少 needs-revalidation 紀錄：{document.relative_to(root).as_posix()}",
+                )
+            )
+
+    if check_git:
+        ignored = _git_command(
+            root, "check-ignore", "--no-index", "--quiet", "--", display
+        )
+        if ignored.returncode == 0:
+            findings.append(
+                Finding(
+                    "LEDGER_IGNORED",
+                    display,
+                    0,
+                    "驗證台帳不可被 .gitignore 靜默排除",
                 )
             )
 
@@ -1117,7 +2061,14 @@ def validate_source(root: Path, *, check_git: bool = True) -> list[Finding]:
     root = root.resolve()
     findings: list[Finding] = []
     source_root, output_root = _validate_book_config(root, findings)
-    patterns = _metadata_patterns(root, findings)
+    check_config = _load_toml(
+        root / "book-check.toml",
+        "CONFIG_CHECK",
+        findings,
+        "book-check.toml",
+    )
+    patterns = _metadata_patterns(root, findings, check_config)
+    ledger_path = _verification_ledger_path(root, check_config, findings)
     findings.extend(validate_repository_markdown_links(root))
     summary = source_root / "SUMMARY.md"
     summary_display = summary.relative_to(root).as_posix()
@@ -1290,6 +2241,17 @@ def validate_source(root: Path, *, check_git: bool = True) -> list[Finding]:
             text = _read_text(path, "DOC_READ", findings, display)
         if text is not None:
             _validate_metadata(path, display, text, states, findings)
+
+    if ledger_path is not None:
+        _validate_verification_ledger(
+            root,
+            ledger_path,
+            required,
+            texts,
+            states,
+            findings,
+            check_git=check_git,
+        )
 
     if check_git:
         _validate_git_paths(root, output_root, reader_files, findings)

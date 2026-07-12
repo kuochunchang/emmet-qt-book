@@ -33,6 +33,43 @@ def chapter(title: str = "第一章", state: str = "可操作") -> str:
 """
 
 
+def ledger(
+    *,
+    record_id: str = "ch01-order-smoke",
+    document: str = "manuscript/chapters/01.md",
+    title: str = "第一章",
+    state: str = "可操作",
+    result: str = "pass",
+) -> str:
+    return f'''schema_version = 1
+
+[[records]]
+id = "{record_id}"
+batch = "W1"
+document = "{document}"
+chapter = "{title}"
+claim = "固定版本的訂單模型 smoke 通過。"
+content_state = "{state}"
+tag_commit = "v0.3.0@{FULL_SHA}"
+full_commit = "{FULL_SHA}"
+data_checksums = []
+data_checksum_note = "不適用：這個測試不使用市場資料。"
+formal_entrypoints = []
+schemas = ["quant.common.models.orders.Order"]
+interface_note = "使用已發布的訂單模型測試。"
+evidence_refs = [
+  "repo:emmet-qt-bt1@{FULL_SHA}:tests/unit/test_models_orders.py",
+]
+verification_commands = ["uv run pytest tests/unit/test_models_orders.py -q"]
+oracle = "exit 0 且顯示 32 passed。"
+result = "{result}"
+observed = "32 passed。"
+known_differences = []
+verified_on = "2026-07-12"
+revalidation_triggers = ["訂單模型、測試或基線改變"]
+'''
+
+
 class Fixture:
     def __init__(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -56,6 +93,9 @@ create-missing = false
             "book-check.toml",
             """[metadata]
 required = ["chapters/*.md"]
+
+[verification]
+ledger = "verification/ledger.toml"
 """,
         )
         self.write(
@@ -78,9 +118,11 @@ required = ["chapters/*.md"]
 
 - **可操作**：已驗證。
 - **規劃中**：尚未交付。
+- **需重驗**：既有證據已失效。
 """,
         )
         self.write("manuscript/chapters/01.md", chapter())
+        self.write("verification/ledger.toml", ledger())
 
     def write(self, relative: str, content: str) -> Path:
         path = self.root / relative
@@ -195,6 +237,272 @@ class SourceCheckTests(unittest.TestCase):
             ),
         )
         self.assertIn("VERIFY_BASELINE_MISMATCH", codes(self.validate()))
+
+    def test_verification_ledger_requires_coverage_and_unique_ids(self) -> None:
+        duplicate = ledger() + ledger().replace("schema_version = 1\n\n", "", 1)
+        self.fixture.write("verification/ledger.toml", duplicate)
+        self.assertIn("LEDGER_ID_DUPLICATE", codes(self.validate()))
+
+        duplicate_claim = ledger() + ledger(record_id="ch01-order-smoke-copy").replace(
+            "schema_version = 1\n\n", "", 1
+        )
+        self.fixture.write("verification/ledger.toml", duplicate_claim)
+        self.assertIn("LEDGER_CLAIM_DUPLICATE", codes(self.validate()))
+
+        equivalent_path_claim = ledger() + ledger(
+            record_id="ch01-order-smoke-copy",
+            document="manuscript/chapters/./01.md",
+        ).replace("schema_version = 1\n\n", "", 1)
+        self.fixture.write("verification/ledger.toml", equivalent_path_claim)
+        found = codes(self.validate())
+        self.assertIn("LEDGER_CLAIM_DUPLICATE", found)
+        self.assertIn("LEDGER_DOCUMENT", found)
+
+        self.fixture.write(
+            "verification/ledger.toml", "schema_version = 1\nrecords = []\n"
+        )
+        found = codes(self.validate())
+        self.assertIn("LEDGER_RECORDS", found)
+        self.assertIn("LEDGER_COVERAGE", found)
+
+    def test_verification_ledger_schema_is_closed_and_versioned(self) -> None:
+        content = ledger().replace(
+            "schema_version = 1", "schema_version = 2\nunknown_root = true"
+        )
+        self.fixture.write(
+            "verification/ledger.toml", content + '\nmisspelled_field = "x"\n'
+        )
+        found = codes(self.validate())
+        self.assertIn("LEDGER_SCHEMA_VERSION", found)
+        self.assertIn("LEDGER_SCHEMA", found)
+        self.assertIn("LEDGER_FIELD_UNKNOWN", found)
+
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger().replace("schema_version = 1", "schema_version = 1.0"),
+        )
+        self.assertIn("LEDGER_SCHEMA_VERSION", codes(self.validate()))
+
+        (self.fixture.root / "verification/ledger.toml").write_bytes(b"\xff")
+        self.assertIn("LEDGER_PARSE", codes(self.validate()))
+
+        self.fixture.write("verification/ledger.toml", ledger(record_id="bad--id"))
+        self.assertIn("LEDGER_ID", codes(self.validate()))
+
+    def test_verification_ledger_must_match_document_claims(self) -> None:
+        content = (
+            ledger()
+            .replace('chapter = "第一章"', 'chapter = "另一章"')
+            .replace('content_state = "可操作"', 'content_state = "規劃中"')
+            .replace('verified_on = "2026-07-12"', 'verified_on = "2026-07-11"')
+            .replace("v0.3.0@", "v9.9.9@", 1)
+        )
+        self.fixture.write("verification/ledger.toml", content)
+        found = codes(self.validate())
+        self.assertIn("LEDGER_CHAPTER", found)
+        self.assertIn("LEDGER_STATE_MISMATCH", found)
+        self.assertIn("LEDGER_DATE_MISMATCH", found)
+        self.assertIn("LEDGER_BASELINE_MISMATCH", found)
+
+        alternate = FULL_SHA[:12] + "0" * 28
+        self.fixture.write(
+            "manuscript/chapters/01.md",
+            chapter().replace("- 對照 tag／commit：", "-  對照 tag／commit："),
+        )
+        self.fixture.write(
+            "verification/ledger.toml", ledger().replace(FULL_SHA, alternate)
+        )
+        self.assertIn("LEDGER_AUTHOR_MISMATCH", codes(self.validate()))
+
+        self.fixture.write(
+            "manuscript/chapters/01.md",
+            chapter().replace(
+                f"- 對照 tag／commit：`v0.3.0@{FULL_SHA}`",
+                f"- 對照 tag／commit：\n  `v0.3.0@{FULL_SHA}`",
+            ),
+        )
+        self.assertIn("LEDGER_AUTHOR_MISMATCH", codes(self.validate()))
+
+    def test_verification_ledger_checks_checksum_and_na_rules(self) -> None:
+        content = ledger().replace(
+            "data_checksums = []",
+            'data_checksums = ["sample=sha256:abc"]',
+        )
+        self.fixture.write("verification/ledger.toml", content)
+        self.assertIn("LEDGER_CHECKSUM", codes(self.validate()))
+
+        digest_a = "a" * 64
+        digest_b = "b" * 64
+        content = ledger().replace(
+            "data_checksums = []",
+            "data_checksums = [\n"
+            f'  "sample=sha256:{digest_a}",\n'
+            f'  "sample=sha256:{digest_b}",\n'
+            "]",
+        )
+        self.fixture.write("verification/ledger.toml", content)
+        found = codes(self.validate())
+        self.assertIn("LEDGER_CHECKSUM_ID_DUPLICATE", found)
+        self.assertIn("LEDGER_CHECKSUM_CONTRADICTION", found)
+
+        content = ledger().replace(
+            'data_checksum_note = "不適用：這個測試不使用市場資料。"',
+            'data_checksum_note = "沒有資料"',
+        )
+        self.fixture.write("verification/ledger.toml", content)
+        self.assertIn("LEDGER_CHECKSUM_NA", codes(self.validate()))
+
+        content = ledger().replace(
+            'interface_note = "使用已發布的訂單模型測試。"',
+            'interface_note = "不適用：已有 schema。"',
+        )
+        self.fixture.write("verification/ledger.toml", content)
+        self.assertIn("LEDGER_INTERFACE_CONTRADICTION", codes(self.validate()))
+
+        content = (
+            ledger()
+            .replace(
+                'data_checksum_note = "不適用：這個測試不使用市場資料。"',
+                'data_checksum_note = "不適用："',
+            )
+            .replace(
+                'formal_entrypoints = ["pytest tests/unit/test_models_orders.py"]',
+                "formal_entrypoints = []",
+            )
+            .replace('schemas = ["quant.common.models.orders.Order"]', "schemas = []")
+            .replace(
+                'interface_note = "使用已發布的訂單模型測試。"',
+                'interface_note = "不適用："',
+            )
+        )
+        self.fixture.write("verification/ledger.toml", content)
+        found = codes(self.validate())
+        self.assertIn("LEDGER_CHECKSUM_NA", found)
+        self.assertIn("LEDGER_INTERFACE_NA", found)
+
+    def test_verification_ledger_requires_commands_triggers_and_state_pair(
+        self,
+    ) -> None:
+        content = (
+            ledger(result="needs-revalidation")
+            .replace(
+                'verification_commands = ["uv run pytest tests/unit/test_models_orders.py -q"]',
+                "verification_commands = []",
+            )
+            .replace(
+                'revalidation_triggers = ["訂單模型、測試或基線改變"]',
+                "revalidation_triggers = []",
+            )
+        )
+        self.fixture.write("verification/ledger.toml", content)
+        found = codes(self.validate())
+        self.assertIn("LEDGER_COMMANDS", found)
+        self.assertIn("LEDGER_REVALIDATION_TRIGGERS", found)
+        self.assertIn("LEDGER_REVALIDATION_STATE", found)
+
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger().replace(
+                "evidence_refs = [\n"
+                f'  "repo:emmet-qt-bt1@{FULL_SHA}:tests/unit/test_models_orders.py",\n'
+                "]",
+                "evidence_refs = []",
+            ),
+        )
+        self.assertIn("LEDGER_EVIDENCE_REFS", codes(self.validate()))
+
+        self.fixture.write("manuscript/chapters/01.md", chapter(state="需重驗"))
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger(state="需重驗", result="needs-revalidation"),
+        )
+        self.assertEqual([], [str(item) for item in self.validate()])
+
+    def test_verification_ledger_validates_book_and_url_evidence(self) -> None:
+        repository_reference = (
+            f"repo:emmet-qt-bt1@{FULL_SHA}:tests/unit/test_models_orders.py"
+        )
+        self.fixture.write("docs/evidence.md", "# Evidence\n\n## Oracle\n")
+        self.fixture.write("docs/evidence.txt", "not a fragment-aware format\n")
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger().replace(repository_reference, "book:docs/evidence.md#oracle"),
+        )
+        self.assertEqual([], [str(item) for item in self.validate()])
+
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger().replace(repository_reference, "book:docs/evidence.md#missing"),
+        )
+        self.assertIn("LEDGER_EVIDENCE_FRAGMENT", codes(self.validate()))
+
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger().replace(repository_reference, "book:docs/evidence.txt#missing"),
+        )
+        self.assertIn("LEDGER_EVIDENCE_FRAGMENT", codes(self.validate()))
+
+        for invalid in (
+            "url:http://example.com/evidence",
+            "url:https://[",
+            "url:https://exa mple.com/evidence",
+            "url:https://example.com/%zz",
+            "url:https://example.com:abc",
+            "book://[",
+            "book:docs/evidence.md#bad%zz",
+        ):
+            self.fixture.write(
+                "verification/ledger.toml",
+                ledger().replace(repository_reference, invalid),
+            )
+            self.assertIn("LEDGER_EVIDENCE", codes(self.validate()), invalid)
+
+        for invalid_repository_path in (".git/config", "."):
+            invalid = f"repo:emmet-qt-bt1@{FULL_SHA}:{invalid_repository_path}"
+            self.fixture.write(
+                "verification/ledger.toml",
+                ledger().replace(repository_reference, invalid),
+            )
+            self.assertIn("LEDGER_EVIDENCE", codes(self.validate()), invalid)
+
+        self.fixture.init_git(ignore="/book/\n/.cache/\n")
+        self.fixture.write(".cache/ignored.md", "# Ignored\n")
+        for unavailable in ("book:.cache/ignored.md", "book:.git/config"):
+            self.fixture.write(
+                "verification/ledger.toml",
+                ledger().replace(repository_reference, unavailable),
+            )
+            self.assertIn(
+                "LEDGER_EVIDENCE_MISSING", codes(self.validate(git=True)), unavailable
+            )
+
+        loop_a = self.fixture.root / "loop-a"
+        loop_b = self.fixture.root / "loop-b"
+        loop_a.symlink_to(loop_b)
+        loop_b.symlink_to(loop_a)
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger().replace(repository_reference, "book:loop-a"),
+        )
+        self.assertIn("LEDGER_EVIDENCE_MISSING", codes(self.validate(git=True)))
+
+    def test_verification_ledger_rejects_escaped_or_ignored_location(self) -> None:
+        self.fixture.write(
+            "verification/ledger.toml",
+            ledger(document="../outside.md"),
+        )
+        self.assertIn("LEDGER_DOCUMENT", codes(self.validate()))
+
+        ledger_path = self.fixture.root / "verification/ledger.toml"
+        ledger_path.unlink()
+        outside = self.fixture.write("outside-ledger.toml", ledger())
+        ledger_path.symlink_to(outside)
+        self.assertIn("LEDGER_SYMLINK", codes(self.validate()))
+        ledger_path.unlink()
+
+        self.fixture.write("verification/ledger.toml", ledger())
+        self.fixture.init_git(ignore="/book/\n/verification/\n")
+        self.assertIn("LEDGER_IGNORED", codes(self.validate(git=True)))
 
     def test_author_record_hidden_or_not_last_fails(self) -> None:
         path = "manuscript/chapters/01.md"

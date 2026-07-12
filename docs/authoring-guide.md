@@ -36,6 +36,11 @@
 固定工具版本、孤兒與 metadata 適用範圍統一見[出版工具鏈與 book check](publishing.md)；
 不得以單獨執行 renderer 取代完整品質入口。
 
+章末「作者驗證紀錄」是讀者可見摘要；claim 級版本、命令、oracle、結果、差異與
+重驗條件統一維護在[作者驗證台帳](verification-ledger.md)。新增或重驗章稿時必須
+在同一個 PR 更新台帳，不另建試算表或第二份 Markdown 台帳。讀者完成練習產生的
+專業紀錄屬於讀者，不提交進作者台帳。
+
 程式、HTML 或 Markdown 語法示範放在 fenced code block，不直接嵌入可執行的 raw
 HTML。書稿中的圖片、script 與其他 reader resource 必須納入 repository 並可由
 book check 在離線產物中解析；外部網址只作為讀者連結。
