@@ -204,12 +204,21 @@ def codes(findings) -> set[str]:
 
 class SourceCheckTests(unittest.TestCase):
     def setUp(self) -> None:
+        # book-check 允許用 EMMET_QT_BT1_DIR 覆寫配套路徑。呼叫者環境裡的值
+        # 不能滲進 fixture，否則測試會依賴外部狀態——而且會依賴執行順序：
+        # 剛好有另一個測試在 cleanup 時 pop 掉它，字母序又讓那個測試排在
+        # 台帳測試之前，整套就會「意外通過」。
+        original = os.environ.pop("EMMET_QT_BT1_DIR", None)
+        if original is not None:
+            self.addCleanup(os.environ.__setitem__, "EMMET_QT_BT1_DIR", original)
         self.fixture = Fixture()
 
     def tearDown(self) -> None:
         self.fixture.close()
 
     def validate(self, *, git: bool = False):
+        # 刻意不傳 companion：讓 validate_source 走真實的 ../emmet-qt-bt1
+        # 解析路徑，否則 resolver 等於沒被測到。
         return validate_source(self.fixture.root, check_git=git)
 
     def chapter(self, *args, **kwargs) -> str:
