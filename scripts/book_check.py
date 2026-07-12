@@ -458,15 +458,8 @@ def _validate_book_config(root: Path, findings: list[Finding]) -> tuple[Path, Pa
 
 
 def _metadata_patterns(
-    root: Path, findings: list[Finding], config: dict | None = None
+    root: Path, findings: list[Finding], config: dict
 ) -> list[str]:
-    if config is None:
-        config = _load_toml(
-            root / "book-check.toml",
-            "CONFIG_CHECK",
-            findings,
-            "book-check.toml",
-        )
     metadata = config.get("metadata")
     if not isinstance(metadata, dict):
         findings.append(
