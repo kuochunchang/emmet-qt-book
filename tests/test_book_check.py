@@ -267,6 +267,18 @@ class SourceCheckTests(unittest.TestCase):
         self.assertEqual("COMPANION_NOT_GIT", error)
         self.assertIn(str(self.fixture.companion.root), tried)
 
+    def test_companion_env_override_empty_value_fails_closed(self) -> None:
+        # 空字串是設定錯誤，不是「未設定」：不得退回 sibling default，更不得
+        # 讓 Path("") 變成 cwd、把別的 repository 當成配套 repo。
+        from scripts.book_check import _resolve_companion
+
+        os.environ["EMMET_QT_BT1_DIR"] = ""
+        self.addCleanup(os.environ.pop, "EMMET_QT_BT1_DIR", None)
+        companion, error, tried = _resolve_companion(self.fixture.root)
+        self.assertIsNone(companion)
+        self.assertEqual("COMPANION_MISSING", error)
+        self.assertIn("EMMET_QT_BT1_DIR", tried)
+
     def test_baseline_verification_against_the_companion(self) -> None:
         from scripts.book_check import Finding, _verify_baseline
 

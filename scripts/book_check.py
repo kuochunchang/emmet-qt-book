@@ -1810,6 +1810,10 @@ def _resolve_companion(root: Path) -> tuple[Path | None, str | None, str]:
     if override:
         candidate = Path(override)
         tried = f"${COMPANION_ENV}={candidate}"
+    elif override is not None:
+        # 空字串是設定錯誤，不是「未設定」：fallback 會靜默降級到別的
+        # repository，Path("") 又等於 cwd，兩者都不允許。
+        return None, "COMPANION_MISSING", f"${COMPANION_ENV}（已設定但為空）"
     else:
         candidate = root.parent / COMPANION_REPO
         tried = f"{candidate}（預設 sibling；${COMPANION_ENV} 未設定）"
