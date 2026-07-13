@@ -125,7 +125,8 @@ G1–G4 隨章更新，並保持開啟到 `W1-final`。完整退出條件以 cur
 - 不直接推送 `main`；使用聚焦分支與 PR。
 - PR 以 `Refs #N` 關聯 bundle／meta Issues；最後完成該 Issue 的 PR 才用
   `Closes #N`。
-- 未經使用者明確要求，不自行合併 PR、建立 release 或關閉仍有工作項目的 Issue。
+- 未經使用者明確要求，不自行合併 PR、建立 release 或關閉仍有工作項目的 Issue；
+  唯一例外見「三角色 agent 閉環（loop 工作流）」一節。
 - GitHub comment 於文末註記撰寫 agent，例如 `— Codex`。
 
 章節或基礎設施工作完成前，至少確認：
@@ -136,6 +137,20 @@ G1–G4 隨章更新，並保持開啟到 `W1-final`。完整退出條件以 cur
 - book check、連結、格式及與任務相關的驗證通過；在 Issue #8 建立 check 以前，
   #8 本身以它新增的 bootstrap／self-check 證據取代此要求。
 - 審查 finding 已處理或以明確 Issue 追蹤，不以「之後再修」冒充完成。
+
+## 三角色 agent 閉環（loop 工作流）
+
+經使用者核准（2026-07-13，追蹤 Issue #40），本 repo 允許三個角色 session
+（dispatcher／coder／reviewer）在 active gate 範圍內自動推進工作。協定正本為
+`docs/agent-loop.md`，角色程序在 `.claude/skills/`。要點：
+
+- dispatcher 得合併已標 `loop:approved`、有 reviewer 署名裁決留言、且屬
+  active gate 派工範圍的 PR；這是上節「不自行合併 PR」的唯一例外。
+- coder 與 reviewer 的權責與紅線依協定正本；reviewer 的裁決以 label 表達，
+  不使用 GitHub 原生 review approve。
+- Gate 升級不在授權範圍：dispatcher 只彙整退出證據並通知使用者，transition
+  仍依下節「Gate 升級」由使用者核准後執行。
+- 使用者可隨時在 Meta Issue #1 加 `loop:paused` label 暫停全部 agent。
 
 ## Gate 升級
 
