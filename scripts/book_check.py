@@ -2232,14 +2232,18 @@ def validate_source(
     patterns = _metadata_patterns(root, findings, check_config)
     ledger_path = _verification_ledger_path(root, findings)
     if ledger_path is not None and companion is None:
-        companion, _, tried = _resolve_companion(root)
+        companion, error, tried = _resolve_companion(root)
         if companion is None:
+            if error == "COMPANION_NOT_GIT":
+                code, reason = "COMPANION_NOT_GIT", "配套路徑不是 git repository"
+            else:
+                code, reason = "COMPANION_MISSING", "找不到配套 repo"
             findings.append(
                 Finding(
-                    "COMPANION_MISSING",
+                    code,
                     VERIFICATION_LEDGER_PATH,
                     0,
-                    f"找不到配套 repo（{tried}）；台帳身分驗證無法執行",
+                    f"{reason}（{tried}）；台帳身分驗證無法執行",
                 )
             )
             ledger_path = None

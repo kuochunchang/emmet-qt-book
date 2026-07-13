@@ -279,6 +279,12 @@ class SourceCheckTests(unittest.TestCase):
         self.assertEqual("COMPANION_MISSING", error)
         self.assertIn("EMMET_QT_BT1_DIR", tried)
 
+    def test_source_findings_keep_the_companion_error_kind(self) -> None:
+        shutil.rmtree(self.fixture.companion.root / ".git")
+        found = codes(self.validate())
+        self.assertIn("COMPANION_NOT_GIT", found)
+        self.assertNotIn("COMPANION_MISSING", found)
+
     def test_baseline_verification_against_the_companion(self) -> None:
         from scripts.book_check import Finding, _verify_baseline
 
