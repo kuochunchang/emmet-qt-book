@@ -1,0 +1,166 @@
+schema_version = 2
+
+# 每個寫作批次宣告一次基線。checker 對配套 repo 核對 tag 真的解析到這個
+# commit（tag 可能被移動），每筆 record 的 evidence 也對這個 commit 驗證。
+# 遷移時只改這裡一行：所有 record 會立刻失敗，逐一重驗或標成需重驗為止。
+[baselines]
+W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
+
+[[records]]
+id = "setup-v030-tag-worktree"
+batch = "W1"
+document = "manuscript/front-matter/setup.md"
+chapter = "實作準備：建立版本固定的配套環境"
+claim = "v0.3.0 tag 可解析到固定 commit，並能在不切換開發工作樹的情況下建立乾淨的隔離 worktree。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：本項只驗證 Git 版本身分與 worktree，不讀取交易資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項使用 Git 固定版本，沒有 Emmet 讀者／產品入口或 schema。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:pyproject.toml",
+]
+verification_commands = [
+  "git -C ../emmet-qt-bt1 rev-parse 'v0.3.0^{commit}'",
+  "git -C ../emmet-qt-bt1 worktree add --detach ../emmet-qt-bt1-v0.3.0 c999965e5cc923281541409cda9502beb93b8a60",
+  "git -C ../emmet-qt-bt1-v0.3.0 rev-parse HEAD",
+  "git -C ../emmet-qt-bt1-v0.3.0 status --short",
+]
+executable = false
+executable_note = "不適用：命令包含 git worktree add，會建立目錄，不可自動重跑。本筆的 pass 因此永遠不會被機器驗證。"
+oracle_exit_code = 0
+oracle_stdout_contains = []
+result = "pass"
+observed = "tag 與 HEAD 均為 c999965e5cc923281541409cda9502beb93b8a60；隔離 worktree 乾淨。"
+known_differences = [
+  "若目標 worktree 已存在，應先核對既有路徑與 SHA，不可重複執行建立命令或覆蓋目錄。",
+]
+verified_on = "2026-07-12"
+revalidation_triggers = [
+  "v0.3.0 tag 指向改變",
+  "配套基線 tag 或 commit 改變",
+  "書中隔離 worktree 流程改變",
+]
+
+[[records]]
+id = "setup-v030-locked-smoke"
+batch = "W1"
+document = "manuscript/front-matter/setup.md"
+chapter = "實作準備：建立版本固定的配套環境"
+claim = "固定版本可用提交的 lockfile 建立 Python 3.12 環境，且訂單模型 smoke test 全數通過。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：smoke test 使用程式內固定案例，不載入交易資料集。"
+formal_entrypoints = []
+schemas = [
+  "quant.common.models.orders.Order",
+  "quant.common.models.orders.OrderUpdate",
+]
+interface_note = "locked environment 與已發布訂單模型測試共同構成 setup smoke。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:uv.lock",
+  "repo:emmet-qt-bt1:tests/unit/test_models_orders.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/orders.py",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run pytest tests/unit/test_models_orders.py -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = ["32 passed"]
+result = "pass"
+observed = "Python 3.12.3；32 passed。"
+known_differences = [
+  "實際驗證基線只有 Linux／Bash；其他作業系統與 shell 尚未驗證。",
+]
+verified_on = "2026-07-12"
+revalidation_triggers = [
+  "uv.lock 或 Python 版本約束改變",
+  "訂單模型或 smoke test 改變",
+  "預期通過數量或 setup 命令改變",
+  "配套基線 tag 或 commit 改變",
+]
+
+[[records]]
+id = "ch01-v030-system-boundaries"
+batch = "W1"
+document = "manuscript/chapters/01-professional-evidence.md"
+chapter = "專業不是預測準，而是能對決定負責"
+claim = "第 1 章系統對照所引用的 v0.3.0 模組路徑存在，且 quant.strategy_api 在此基線只有 package shell。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項核對程式模組責任邊界，不使用市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項核對已發布 package／模組責任邊界，不把模組路徑當成產品入口或 schema。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:src/quant/data/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/common/datasource/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/orders.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/common/execution/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/accounting.py",
+  "repo:emmet-qt-bt1:src/quant/common/rules/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/strategy_api/__init__.py",
+]
+verification_commands = [
+  "git -C ../emmet-qt-bt1-v0.3.0 ls-tree -r --name-only HEAD -- src/quant/data src/quant/common src/quant/strategy_api",
+  "git -C ../emmet-qt-bt1-v0.3.0 show HEAD:src/quant/strategy_api/__init__.py",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = ["# quant.strategy_api module"]
+result = "pass"
+observed = "所有引用路徑存在；strategy_api/__init__.py 內容只有『# quant.strategy_api module』。"
+known_differences = [
+  "完整策略介面與引擎風控屬 Phase 4，v0.3.0 不能支持讀者操作宣稱。",
+]
+verified_on = "2026-07-12"
+revalidation_triggers = [
+  "章中系統對照表改變",
+  "引用模組移動、改名或責任改變",
+  "strategy_api 發布正式介面",
+  "配套基線 tag 或 commit 改變",
+]
+
+[[records]]
+id = "ch01-v030-order-model-smoke"
+batch = "W1"
+document = "manuscript/chapters/01-professional-evidence.md"
+chapter = "專業不是預測準，而是能對決定負責"
+claim = "第 1 章引用的 v0.3.0 訂單模型行為通過已發布單元測試。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：訂單模型測試使用程式內固定案例，不載入交易資料集。"
+formal_entrypoints = []
+schemas = [
+  "quant.common.models.orders.Order",
+  "quant.common.models.orders.OrderUpdate",
+]
+interface_note = "以已發布單元測試支撐訂單內容、狀態轉移與更新行為的概念對照。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:tests/unit/test_models_orders.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/orders.py",
+]
+verification_commands = [
+  "uv run pytest tests/unit/test_models_orders.py -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = ["32 passed"]
+result = "pass"
+observed = "32 passed。"
+known_differences = [
+  "這個單元測試只支撐訂單模型，不證明策略、交易績效或 Phase 4 引擎已交付。",
+]
+verified_on = "2026-07-12"
+revalidation_triggers = [
+  "訂單模型或測試案例改變",
+  "第 1 章對訂單責任邊界的敘述改變",
+  "預期通過數量改變",
+  "配套基線 tag 或 commit 改變",
+]

@@ -33,6 +33,7 @@
 - [實作準備：建立版本固定的配套環境](manuscript/front-matter/setup.md)
 - [權威課程大綱](docs/curriculum.md)
 - [寫作指南與章節模板](docs/authoring-guide.md)
+- [作者驗證台帳與重驗流程](docs/verification-ledger.md)
 
 ## 建議閱讀方式
 
@@ -50,6 +51,10 @@
 ```
 
 目前驗證基線為 Linux／Bash。
+
+執行前必須先依[實作準備](manuscript/front-matter/setup.md)建立配套系統的隔離
+worktree。book check 會對配套 repository 核對驗證台帳的基線與 evidence，找不到
+就以 exit 2 中止——台帳無法離線驗證，因此「跳過」不是一個選項。
 
 命令會以固定版本的 mdBook 建置並檢查書稿；成功後由 `book/index.html` 閱讀 HTML
 版。尚未建置時，可由[全書目錄](manuscript/SUMMARY.md)開啟已有章稿；空 target
@@ -69,7 +74,9 @@ book-check.toml           metadata 適用範圍
 docs/
 ├── curriculum.md         課程、章序、能力地圖與開發里程碑
 ├── authoring-guide.md    寫作、版本、驗證規範與章節模板
-└── publishing.md         出版格式、工具版本與 book check 契約
+├── publishing.md         出版格式、工具版本與 book check 契約
+└── verification-ledger.md
+                          作者台帳 schema、邊界與更新流程
 manuscript/
 ├── SUMMARY.md            讀者閱讀順序
 ├── preface.md            讀者契約、證據閉環與內容狀態正本
@@ -77,6 +84,7 @@ manuscript/
 └── chapters/             正文章節
 scripts/book-check        唯一本機建置／品質入口
 tests/                    book check 正向與故障案例
+verification/ledger.toml  唯一的 claim 級作者驗證台帳
 ```
 
 教育目標、章序與寫作批次由 `docs/curriculum.md` 維護；README 不另行定義 agent

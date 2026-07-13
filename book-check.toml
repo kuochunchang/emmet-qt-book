@@ -5,3 +5,6 @@ required = [
   "chapters/*.md",
   "front-matter/setup.md",
 ]
+
+# 作者驗證台帳固定在 verification/ledger.toml，不開放設定：checker 只接受
+# 這一個位置，metadata scope 內的每份書稿都必須在其中至少有一筆紀錄。
