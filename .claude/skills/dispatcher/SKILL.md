@@ -27,8 +27,8 @@ description: agent 閉環的調度角色——輪詢 GitHub 狀態、依 active 
    2. `loop:approved` 的 PR → 執行下方「合併程序」。
    3. 停滯偵測：任一帶 `loop:*` 的物件 updatedAt 距今超過 6 小時 →
       標 `loop:blocked` ＋ 通知。
-   4. 退件計數：`gh pr view <n> --json timelineItems` 中 `loop:changes-requested`
-      被加上第 3 次 → 標 `loop:blocked` ＋ 通知。
+   4. 退件計數：`gh api "repos/{owner}/{repo}/issues/<n>/timeline" --paginate --jq '[.[] | select(.event=="labeled" and .label.name=="loop:changes-requested")] | length'`
+      達 3 → 標 `loop:blocked` ＋ 通知。
    5. 圈外盤點：無任何 `loop:*` label 的 open PR，且尚未留過圈外標記留言 →
       留言請使用者決定收編或自行處理，不接手。
    6. 派工：在途工作為零（無 issue／PR 帶 `loop:queued`、`loop:coding`、
