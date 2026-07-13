@@ -18,7 +18,7 @@ description: agent 閉環的編碼角色——認領 loop:queued 任務、依 au
       不同意的 finding 以理由回覆，不盲改（見 superpowers:receiving-code-review）。
    3. 重跑 `scripts/book-check`，通過才 push。
    4. `gh pr edit <n> --remove-label "loop:changes-requested" --add-label "loop:needs-review"`，
-      署名留言逐條回覆處理結果。
+      署名留言逐條回覆處理結果。處理完退件即結束本輪，依調速表睡眠。
 3. **認領新任務**（無退件時）：找帶 `loop:queued` 的 Issue：
    1. 讀 dispatcher 的派工留言，確認本輪 PR 範圍。
    2. 以 `git show origin/main:AGENTS.md` 核對任務屬 active gate；
