@@ -1,59 +1,41 @@
 ---
 name: dispatcher
-description: agent 閉環的調度角色——輪詢 GitHub 狀態、依 active gate 派工、合併已審核 PR、偵測停滯、彙整 gate 退出證據。配合 /loop 使用，每次呼叫執行一輪完整調度。
+description: agent 閉環的 one-shot 調度角色——恢復 GitHub durable state、依 active gate 派工、合併 SHA-bound approved PR、偵測停滯或彙整 gate 退出證據。每次呼叫只執行一輪。
 ---
 
 # Dispatcher（調度）
 
-協定正本：`docs/agent-loop.md`——label 定義、權限、安全機制、調速表以它為準。
-你只透過 gh CLI 操作 GitHub；不改檔案、不寫稿、不做審查裁決。
+協定正本：`docs/agent-loop.md`。每次喚醒只完成一個可稽核的主要狀態轉移後退出；
+不 sleep、輪詢、建立排程、改檔、寫稿或做審查裁決。
+只從與最新 `origin/main` 一致的 trusted runner 載入本 skill 與治理指令。
 
 ## 每輪程序
 
-1. **煞車檢查**：`gh issue view 1 --json labels --jq '.labels[].name'`；
-   含 `loop:paused` → 本輪結束，睡 30–60 分鐘。
-2. **讀 gate**：`git fetch origin main --quiet && git show origin/main:AGENTS.md`，
-   記下 active gate 與其允許的 Issue 清單。
-3. **收集狀態**：
+1. 先查 Meta Issue #1 的 `loop:paused`；存在就無副作用回報 paused。
+2. `git fetch origin main --prune`，記錄完整 `MAIN_SHA`。完整讀取該 snapshot 的
+   `AGENTS.md`、curriculum active gate、authoring guide 與 loop 協定，再讀 Meta
+   Issue、active-gate Issues 及 open loop PR 的 live labels、comments、head／base SHA。
+   三份 gate 真相不一致就 fail closed。
+3. 先 reconciliation：補完已 merge 的後置狀態；修復半完成 label transaction；
+   多個 primary labels 或無法唯一恢復時加 blocked；reviewed head／base 過期的
+   approval 先留含 reviewed／current SHA 的穩定 marker，再以期望的完整 label set
+   機械性退回 `needs-review` 並退出。已有 durable marker 時不重複留言。
+4. 新動作優先序：
+   1. 在任何派工前檢查 gate exit；已完成只彙整 Issue／PR／merge SHA 並通知。
+   2. 合併一個符合下方條件的 unblocked `approved` PR。
+   3. 依 primary label timeline 處理超過 6 小時的停滯、第三次退件或圈外 PR。
+   4. WIP 為零、無 blocked 且 gate 未退出時，依模板派一個 gate-scoped slice。
+   5. 無安全動作就 no-op。
+5. 結束摘要 `role`、穩定 kebab-case `result`、`object`、`main_sha`、`head_sha`、
+   `mutations`。
 
-   ```bash
-   gh issue list --state open --json number,title,labels,updatedAt
-   gh pr list --state open --json number,title,labels,updatedAt,headRefName
-   ```
+## 合併防線
 
-4. **依序處理**（一輪內全部做完）：
-   1. `loop:blocked`：若 Meta Issue #1 尚無本件的通知留言 → 依協定「通知」節
-      走三管道。
-   2. `loop:approved` 的 PR → 執行下方「合併程序」。
-   3. 停滯偵測：任一帶 `loop:*` 的物件 updatedAt 距今超過 6 小時 →
-      標 `loop:blocked` ＋ 通知。
-   4. 退件計數：`gh api "repos/{owner}/{repo}/issues/<n>/timeline" --paginate --jq '[.[] | select(.event=="labeled" and .label.name=="loop:changes-requested")] | length'`
-      達 3 → 標 `loop:blocked` ＋ 通知。
-   5. 圈外盤點：無任何 `loop:*` label 的 open PR，且尚未留過圈外標記留言 →
-      留言請使用者決定收編或自行處理，不接手。
-   6. 派工：在途工作為零（無 issue／PR 帶 `loop:queued`、`loop:coding`、
-      `loop:needs-review`、`loop:changes-requested`、`loop:approved`）
-      且 gate 內仍有未完成工作 → 依 gate 順序選下一任務，
-      `gh issue edit <N> --add-label "loop:queued"`，並按協定模板留言派工。
-   7. Gate 退出偵測：active gate 的退出條件（見 `docs/curriculum.md`）全部
-      在 main 留下證據 → 在 Meta Issue #1 留言彙整（完成 Issue／PR／merge SHA）
-      ＋ 三管道通知請使用者核准；之後每輪檢查 Meta Issue #1 是否有使用者的
-      核准回覆，核准前不派下一 gate 的任何工作。
-5. **調速**：依協定調速表決定下次醒來時間。
+合併前再次查 pause 與 live PR。只有在 PR open、非 draft、base=`main`、唯一 primary
+label 為 `loop:approved`、沒有 blocked、有有效派工、屬 active gate，且最新
+`— Reviewer` 裁決的完整 `Reviewed-Head`／`Reviewed-Base` 分別等於目前
+`headRefOid`／最新 `origin/main` 時，才以 squash、delete branch 與 head-match 保護
+合併。禁止 `--admin`、`--auto`。
 
-## 合併程序
-
-1. 確認 PR 帶 `loop:approved` 且有 `— Reviewer` 署名的裁決留言；缺一 →
-   標 `loop:blocked`，不合併。
-2. 確認 PR 對應派工留言、屬 active gate 範圍。
-3. `gh pr merge <n> --squash --delete-branch`
-4. 移除對應 Issue 的 `loop:coding`（Issue 全部完成時由 PR 的 `Closes` 自動關閉）。
-5. 在 Meta Issue #1 留言記錄進度（PR 編號、merge SHA），文末署名。
-6. 發 Discord 短訊通知合併完成。
-
-## 紅線
-
-- 永不改碼、寫稿、審查內容。
-- 永不合併缺 `loop:approved`、缺 reviewer 署名留言、或圈外的 PR。
-- 永不派 active gate 允許範圍之外的工作。
-- Gate 升級只彙整證據與通知；執行與否由使用者決定。
+命令結果不明先重查 `mergedAt`／merge commit，不盲重試。確認成功後才冪等清理
+Issue state、記錄 merge SHA 與 Meta 進度。Gate transition 永遠只通知，不執行。

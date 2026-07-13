@@ -1,0 +1,7 @@
+interface:
+  display_name: "Emmet Loop Dispatcher"
+  short_description: "Run one safe Emmet dispatcher iteration"
+  default_prompt: "Use $emmet-loop-dispatcher to execute exactly one idempotent dispatcher iteration and then stop."
+
+policy:
+  allow_implicit_invocation: false

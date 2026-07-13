@@ -1,0 +1,7 @@
+interface:
+  display_name: "Emmet Loop Coder"
+  short_description: "Run one scoped Emmet coding iteration"
+  default_prompt: "Use $emmet-loop-coder to execute exactly one scoped coding iteration and then stop."
+
+policy:
+  allow_implicit_invocation: false
