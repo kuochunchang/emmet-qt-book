@@ -1,0 +1,7 @@
+interface:
+  display_name: "Emmet Loop Reviewer"
+  short_description: "Run one independent Emmet review iteration"
+  default_prompt: "Use $emmet-loop-reviewer to execute exactly one independent review iteration and then stop."
+
+policy:
+  allow_implicit_invocation: false

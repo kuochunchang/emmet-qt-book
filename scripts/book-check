@@ -67,6 +67,6 @@ if [[ "$ACTUAL_VERSION" != "mdbook v$MDBOOK_VERSION" && "$ACTUAL_VERSION" != "md
 fi
 
 BOOK_CHECK_TEST_MDBOOK="$MDBOOK" \
-  python3 -m unittest discover -s "$ROOT/tests" -p 'test_book_check.py' -v
+  python3 -m unittest discover -s "$ROOT/tests" -p 'test_*.py' -v
 
 python3 -u "$ROOT/scripts/book_check.py" --root "$ROOT" --mdbook "$MDBOOK"

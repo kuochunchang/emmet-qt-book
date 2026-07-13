@@ -51,6 +51,10 @@ README 若與對應權威來源不一致，以權威來源為準並修正 README
   - 修復 agent guard 未被載入，或 `AGENTS.md`、`docs/curriculum.md` 與 Meta
     Issue #1 不一致的治理缺陷。
 - 使用者核准且由 Meta Issue #1 追蹤的 gate-transition 工作。
+- 使用者於 2026-07-13 明確核准、由 Issue #40 追蹤的 loop 跨 client 治理工作：
+  同步 `.claude/skills/` 與 `.agents/skills/` 角色程序、協定文件，以及一次只喚醒
+  一輪的 Codex adapter 與其測試。此例外不授權正文／附錄擴寫、安裝或啟用主機
+  排程、實際自動合併、關閉工作 Issue，或 gate transition。
 
 建立或標記 Issue 本身不構成上述修正的授權；例外工作不得新增或實質擴寫正文／
 附錄，也不得取用後續 gate 的能力、範例、輸出或完成證據。
@@ -142,12 +146,20 @@ G1–G4 隨章更新，並保持開啟到 `W1-final`。完整退出條件以 cur
 
 經使用者核准（2026-07-13，追蹤 Issue #40），本 repo 允許三個角色 session
 （dispatcher／coder／reviewer）在 active gate 範圍內自動推進工作。協定正本為
-`docs/agent-loop.md`，角色程序在 `.claude/skills/`。要點：
+`docs/agent-loop.md`；Claude Code 角色程序在 `.claude/skills/`，Codex 角色程序在
+`.agents/skills/emmet-loop-{dispatcher,coder,reviewer}/`。兩套入口共用同一組 GitHub
+durable state，不得各自建立狀態機。要點：
 
-- dispatcher 得合併已標 `loop:approved`、有 reviewer 署名裁決留言、且屬
-  active gate 派工範圍的 PR；這是上節「不自行合併 PR」的唯一例外。
+- dispatcher 得合併已標 `loop:approved`、沒有 `loop:blocked`、有 reviewer 署名且
+  綁定目前 PR head 與受審 `main` SHA 的裁決留言、並屬 active gate 派工範圍的 PR；
+  這是上節「不自行合併 PR」的唯一例外。
 - coder 與 reviewer 的權責與紅線依協定正本；reviewer 的裁決以 label 表達，
   不使用 GitHub 原生 review approve。
+- 每次 Codex 喚醒只執行一輪後結束；重複喚醒由 Codex App Scheduled Tasks 或使用者
+  管理的外部 scheduler 負責。Repo 只提供 `scripts/codex-loop` one-shot adapter，
+  不自行 sleep、遞迴啟動，亦不安裝或啟用主機 scheduler。
+- Role skill 與治理指令只能從符合最新 `origin/main` 的 trusted runner 載入；候選
+  branch／PR 必須在另一 task／candidate worktree 處理，不得成為下一輪控制來源。
 - Gate 升級不在授權範圍：dispatcher 只彙整退出證據並通知使用者，transition
   仍依下節「Gate 升級」由使用者核准後執行。
 - 使用者可隨時在 Meta Issue #1 加 `loop:paused` label 暫停全部 agent。
