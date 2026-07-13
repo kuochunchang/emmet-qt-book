@@ -67,7 +67,7 @@ PR:     loop:needs-review ──(reviewer 裁決)──► loop:approved ──(
 - 任務：#<Issue 編號>（<標題>）
 - 本輪 PR 範圍：<本輪要完成的具體工作與邊界>
 - Gate 依據：<active gate 名稱>；<curriculum 對應段落>
-- 驗收要求：book check 與 pytest 實跑通過；<任務特定要求>
+- 驗收要求：book check 實跑通過（含 unittest 測試）；<任務特定要求>
 
 — Dispatcher
 ```
@@ -83,7 +83,7 @@ PR:     loop:needs-review ──(reviewer 裁決)──► loop:approved ──(
   標 `loop:blocked` ＋ 通知使用者。
 - **退件上限**：同一 PR 第 3 次被標 `loop:changes-requested` 時，dispatcher
   標 `loop:blocked` 交使用者裁決。
-- **誠實原則**：`scripts/book-check` 與 `python3 -m pytest tests/ -q` 未實際
+- **誠實原則**：`scripts/book-check`（含 unittest 測試）未實際
   執行通過，不得標 `loop:needs-review`；reviewer 重跑失敗一律退件。
 
 ## 通知
