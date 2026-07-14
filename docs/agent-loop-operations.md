@@ -66,6 +66,10 @@ active-gate loop
 若有半完成 transaction、互斥 labels、stale approval 或無法解釋的在途工作，這不是
 checkpoint；先喚醒 dispatcher 做 reconciliation，不能直接進行 gate transition。
 
+需要協助逐項核對時，由人類明確呼叫 `$emmet-gate-auditor`。它只讀取固定
+`MAIN_SHA` 與 GitHub live evidence，分開報告退出條件與 transition 狀態；不留言、
+不改 label、不派工，也不替人類核准 gate transition。
+
 ### 通用處理程序
 
 1. 停止外部 timer 或停用 App Scheduled Tasks，避免 checkpoint 期間反覆 no-op 與
