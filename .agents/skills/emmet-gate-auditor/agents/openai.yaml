@@ -1,0 +1,7 @@
+interface:
+  display_name: "Emmet Gate Auditor"
+  short_description: "Audit gate exit evidence for a human decision"
+  default_prompt: "Use $emmet-gate-auditor to audit the current active gate exit evidence and advise the human decision without making mutations."
+
+policy:
+  allow_implicit_invocation: false
