@@ -164,3 +164,151 @@ revalidation_triggers = [
   "預期通過數量改變",
   "配套基線 tag 或 commit 改變",
 ]
+
+[[records]]
+id = "ch02-v030-trust-authorization"
+batch = "W1"
+document = "manuscript/chapters/02-human-llm-strategy-system.md"
+chapter = "你的四位工作夥伴：人類、LLM、策略與系統"
+claim = "v0.3.0 的權威規格把人類帶外授權、LLM 操作、策略沙箱與系統限制分成不同責任；LLM 與策略皆視為不可信主體，strategy_api 完整 tree 仍只有 package shell，後續操作面分屬 Phase 4／5／7／8。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項核對角色、授權與信任邊界，不使用市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項核對權威規格與已發布 package 狀態，不把尚未交付的策略介面、MCP 或 Live 工具當成正式入口／schema。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:AGENTS.md",
+  "repo:emmet-qt-bt1:docs/quantitative-trading-system-design.md",
+  "repo:emmet-qt-bt1:docs/engineering-design.md",
+  "repo:emmet-qt-bt1:docs/development-plan.md",
+  "repo:emmet-qt-bt1:docs/design/step-3b-fill-execution.md",
+  "repo:emmet-qt-bt1:src/quant/strategy_api/__init__.py",
+]
+verification_commands = [
+  "git grep -n -F '策略程式與 LLM 操作者皆視為不可信主體' HEAD -- AGENTS.md",
+  "git grep -n -F '人类的两个角色、两条通道' HEAD -- docs/quantitative-trading-system-design.md",
+  "git grep -n -F 'Server 进程（MCP 端点 + 引擎宿主）' HEAD -- docs/engineering-design.md",
+  "git grep -n -F '完整 TradingEngine 事件循环、策略回调' HEAD -- docs/design/step-3b-fill-execution.md",
+  "test \"$(git ls-tree -r --name-only HEAD -- src/quant/strategy_api)\" = \"src/quant/strategy_api/__init__.py\"",
+  "git ls-tree -r --name-only HEAD -- src/quant/strategy_api",
+  "git show HEAD:src/quant/strategy_api/__init__.py",
+  "git grep -n -F '### Phase 5：Backtest Server' HEAD -- docs/development-plan.md",
+  "git grep -n -F '`quant/mcp/`：streamable HTTP' HEAD -- docs/development-plan.md",
+  "git grep -n -F '`research_query`（duckdb 只读 SQL' HEAD -- docs/development-plan.md",
+  "git grep -n -F '### Phase 7：Paper Trading Server' HEAD -- docs/development-plan.md",
+  "git grep -n -F '`quant/paper/`：会话管理' HEAD -- docs/development-plan.md",
+  "git grep -n -F '### Phase 8：Live Trading Server' HEAD -- docs/development-plan.md",
+  "git grep -n -F '带外确认：`quant confirm` CLI' HEAD -- docs/development-plan.md",
+  "git grep -n -F '分层风控：`live_config.yaml` 硬性上限全表' HEAD -- docs/development-plan.md",
+  "git grep -n -F '| `start_live_trading` | 返回 `pending_confirmation`' HEAD -- docs/quantitative-trading-system-design.md",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "策略程式與 LLM 操作者皆視為不可信主體",
+  "人类的两个角色、两条通道",
+  "Server 进程（MCP 端点 + 引擎宿主）",
+  "完整 TradingEngine 事件循环、策略回调",
+  "src/quant/strategy_api/__init__.py",
+  "# quant.strategy_api module",
+  "### Phase 5：Backtest Server",
+  "`quant/mcp/`：streamable HTTP",
+  "`research_query`（duckdb 只读 SQL",
+  "### Phase 7：Paper Trading Server",
+  "`quant/paper/`：会话管理",
+  "### Phase 8：Live Trading Server",
+  "带外确认：`quant confirm` CLI",
+  "分层风控：`live_config.yaml` 硬性上限全表",
+  "| `start_live_trading` | 返回 `pending_confirmation`",
+]
+result = "pass"
+observed = "權威規格將帶外授權與日常 LLM 操作分離，並把 LLM 與策略列為不可信主體；完整 tree assertion 證明 strategy_api 只有 package shell，development plan 分別列出 Phase 4／5／7／8 邊界。"
+known_differences = [
+  "完整 Engine／策略介面屬 Phase 4，Backtest／研究 MCP 屬 Phase 5，Paper MCP 屬 Phase 7，Live MCP、帶外確認與硬性風控上限屬 Phase 8；本章不得把設計路徑寫成 v0.3.0 可操作入口。",
+]
+verified_on = "2026-07-14"
+revalidation_triggers = [
+  "人類／LLM／策略／系統責任表或衝突情境的判準改變",
+  "帶外授權、硬性上限或不可信主體的權威設計改變",
+  "strategy_api 或後續產品入口正式發布",
+  "配套基線 tag 或 commit 改變",
+]
+
+[[records]]
+id = "ch02-v030-accounting-ownership"
+batch = "W1"
+document = "manuscript/chapters/02-human-llm-strategy-system.md"
+chapter = "你的四位工作夥伴：人類、LLM、策略與系統"
+claim = "v0.3.0 的 BacktestExecution 會先經會計層授權並套用成交，再交付 OrderEvent；FillSimulator 不擁有 canonical 帳戶寫入權。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：單元測試以程式內固定物件核對呼叫順序，不載入市場資料集。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項以已發布內部 protocol 與單元測試核對責任順序，不把 package 路徑當成讀者／產品入口或 schema。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:docs/design/step-3b-fill-execution.md",
+  "repo:emmet-qt-bt1:src/quant/common/execution/base.py",
+  "repo:emmet-qt-bt1:src/quant/common/execution/backtest.py",
+  "repo:emmet-qt-bt1:tests/unit/test_execution_backtest.py",
+]
+verification_commands = [
+  "git grep -n -F 'Engine-owned AccountingLedger 唯一写入 canonical' HEAD -- docs/design/step-3b-fill-execution.md",
+  "uv run pytest tests/unit/test_execution_backtest.py::test_market_open_fill_is_accounted_before_effect_delivery -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Engine-owned AccountingLedger 唯一写入 canonical",
+  "1 passed",
+]
+result = "pass"
+observed = "1 passed；成交先經 authorize_and_apply_fill 與 apply_order_event，再加入待交付 effect。"
+known_differences = [
+  "此 smoke 只支撐 Phase 3 execution／accounting 邊界；完整 TradingEngine、策略回調與會話風控屬 Phase 4。",
+]
+verified_on = "2026-07-14"
+revalidation_triggers = [
+  "BacktestExecution、AccountingPort 或 FillSimulator 的責任邊界改變",
+  "聚焦測試或預期通過數量改變",
+  "第 2 章角色責任表對策略／系統邊界的敘述改變",
+  "配套基線 tag 或 commit 改變",
+]
+
+[[records]]
+id = "ch02-v030-hard-rule-rejection"
+batch = "W1"
+document = "manuscript/chapters/02-human-llm-strategy-system.md"
+chapter = "你的四位工作夥伴：人類、LLM、策略與系統"
+claim = "v0.3.0 的交易所規則驗證會明確拒絕未對齊 tick／step 或低於 minimum notional 的訂單，不會自動截斷成另一張訂單。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：規則測試使用程式內固定訂單與規則，不載入市場資料集。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項驗證已發布的內部交易所規則邊界，不把 package 路徑當成讀者／產品入口或 schema。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:src/quant/common/errors/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/common/rules/filters.py",
+  "repo:emmet-qt-bt1:tests/unit/test_rules_filters.py",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv run pytest tests/unit/test_rules_filters.py -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = ["31 passed"]
+result = "pass"
+observed = "31 passed；price filter、lot size 與 minimum notional 違規皆明確拒絕，未自動截斷。"
+known_differences = [
+  "這項測試只支撐已發布的交易所規則校驗，不證明 Phase 4 會話風控或 Phase 8 Live 硬性上限已交付。",
+]
+verified_on = "2026-07-14"
+revalidation_triggers = [
+  "SymbolRules、validate_order、OrderValidationError 或對應測試改變",
+  "預期通過數量改變",
+  "第 2 章對已發布硬邊界類比的敘述改變",
+  "配套基線 tag 或 commit 改變",
+]
