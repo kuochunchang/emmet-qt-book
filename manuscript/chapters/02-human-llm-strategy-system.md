@@ -49,24 +49,41 @@
 的交接關係如下：
 
 ```text
-人類所有者 ──目標、風險預算──► LLM 操作者 ──結構化請求──► 交易系統
-                                      │                    │
-                                      └─策略版本與設定──► 策略程式
-                                                           │
-                                                受限的訂單意圖
-                                                           ▼
-                                                        交易系統
-                                                           │
-                                      證據、拒絕理由、風險狀態
-                                                           ▼
-人類所有者 ◄────────────── LLM 整理與解釋 ◄───────────────┘
+人類所有者 ──目標、風險預算──► LLM 操作者
+                                   │
+                         結構化工具請求、策略版本／設定
+                                   ▼
+                           MCP／交易系統宿主
+                                   │
+                       靜態檢查、strategy_sha256、載入
+                                   ▼
+                             StrategyRunner
+                                   │
+                           有限 context／事件
+                                   ▼
+                               策略沙箱
+                                   │
+                         白名單 JSON IPC 交易意圖
+                                   ▼
+                             StrategyRunner
+                                   │
+                         Engine 校驗、執行與記帳
+                                   ▼
+                                交易系統
+                                   │
+                        證據、拒絕理由、風險狀態
+                                   ▼
+人類所有者 ◄──────────── LLM 整理與解釋 ◄────────────┘
 
 人類所有者 ──預先定義的帶外通道；僅限特定授權──► 交易系統
 ```
 
-圖中不是每次 LLM 工具呼叫都會經過策略；資料查詢或報告閱讀可以直接由系統
-處理。重點是：策略只能提出受限意圖，LLM 只能使用被授予的工具面，人類的帶外
-授權也只能授權指定動作。最後仍由系統核對規則、目前狀態與不可跨越的限制。
+這張信任圖描述對應 Phase 交付後的設計路徑，不是 `v0.3.0` 已有的操作入口。
+資料查詢或報告閱讀可以由系統宿主直接處理，不必啟動策略；需要載入策略時，
+LLM 也不能把程式直接塞進執行核心，而要由宿主完成靜態檢查、策略雜湊與載入，
+再由 StrategyRunner 隔離策略，僅接受白名單 IPC 意圖。策略只能提出受限意圖，
+LLM 只能使用被授予的工具面，人類的帶外授權也只能授權指定動作。最後仍由系統
+核對規則、目前狀態與不可跨越的限制。
 
 ### 四角色權責表
 
@@ -91,14 +108,25 @@
 4. **範圍**：授權是否只涵蓋指定會話、金額、期限與動作？
 5. **硬限制**：動作是否仍在系統不可跨越的上限內？
 
-對話可以表達意圖，卻未必能證明身分、通道與範圍。帶外確認（out-of-band
-confirmation）是與 LLM 日常操作路徑分離的低頻授權通道；它的價值就在於 LLM
-不能讀取、觸發或替自己完成確認。
+對話可以表達意圖，卻未必能證明身分、通道與範圍。依 Phase 8 的設計，LLM
+可以透過獲准的 Live 工具發起請求，讓系統進入 `pending_confirmation`；這只表示
+「有一項請求等待核准」，不表示 LLM 已完成核准。帶外確認（out-of-band
+confirmation）仍要由獨立通道完成。
+
+「LLM 不能讀取 token、操作帶外通道或替自己確認」也不是無條件成立。它依賴
+獨立 OS 使用者、檔案權限與啟動自檢等部署隔離；任一前提不成立，安全設計就不
+成立，Live Server 應拒絕啟動。這些都是尚未發布的 Phase 8 概念預覽，不是
+`v0.3.0` 可操作流程。
 
 硬限制則不是等待某人說「同意」的待辦事項。若單筆名義額、交易對或其他動作
 超出不可由該工具面修改的上限，正確結果是拒絕。若業務上真的需要改變限制，
 應先停止目前動作，另走已定義的設定與授權程序；不能把這項程序濃縮成聊天室
 裡的一句例外。
+
+完整晉級證據與硬限制也不是同一層。Phase 8 設計會在缺少 robustness 紀錄或
+Paper 時長時預設拒絕，但正式帶外程序可以明確豁免，並把理由寫入審計與確認
+摘要。這項豁免仍不能跨越 `live_config.yaml` 的硬性上限；若要改硬上限，必須
+停止目前動作，由 `quant` 使用者另走設定、權限與啟動自檢程序。
 
 ## 已發布基線與概念預覽的邊界
 
@@ -110,10 +138,12 @@ confirmation）是與 LLM 日常操作路徑分離的低頻授權通道；它的
 | 已發布程式與測試 | 訂單模型、交易所規則、資料、成交、執行與會計等模組已存在；規則校驗會明確拒絕不合法的價格、數量或名義額，不會因呼叫者要求而偷偷截斷 | 不代表完整策略介面、LLM 操作面或 Live 授權流程已可供讀者操作 |
 | 權威設計的概念預覽 | 人類帶外確認、LLM 不可信前提、策略沙箱、分層限額與系統 fail-closed 責任已有明確邊界，可用來做威脅與權責判讀 | 不能虛構 MCP、確認 CLI、實盤輸出、審計紀錄或完成宣稱 |
 
-在這個基線中，`quant.strategy_api` 仍只有一個空的套件入口（package shell）；
-完整 Engine 與策略介面屬 Phase 4，LLM／MCP 操作面屬 Phase 5，Live 帶外確認與
-硬性風控上限屬 Phase 8，都尚未發布。因此本章不提供策略、MCP 或 Live 指令。
-這不是教材漏掉一段操作，而是內容狀態對版本邊界的誠實承諾。
+在這個基線中，`quant.strategy_api` 的完整 tree 仍只有一個空的 `__init__.py`
+套件入口（package shell）。完整 Engine、StrategyRunner 與策略介面屬 Phase 4；
+Backtest／研究 MCP 骨架與工具屬 Phase 5；Paper MCP 與會話工具屬 Phase 7；Live
+MCP、帶外確認與硬性風控上限屬 Phase 8。這些能力都尚未發布，因此本章不提供
+策略、MCP 或 Live 指令。這不是教材漏掉一段操作，而是內容狀態對版本邊界的
+誠實承諾。
 
 ### 一個已發布的硬邊界類比
 
@@ -131,9 +161,9 @@ notional。價格沒有對齊 tick size 時，它會拋出 `OrderValidationError
 | 要求 | 所需角色與授權 | 目前證據 | 判定 |
 |---|---|---|---|
 | 分析訊號與列出不確定性 | LLM 在獲准的研究範圍內操作 | 只有一段對話，尚無資料與研究結果 | 可以繼續蒐證，但不能推導成可交易 |
-| 把單筆上限提高十倍 | 限額擁有者依正式設定與授權程序處理 | 一般對話中的要求 | 停止；LLM 與策略都不能修改硬限制 |
-| 略過確認 | 沒有合法角色可以把必要確認直接省略 | 只有「我同意了」 | 拒絕；缺少帶外授權不能降級成聊天確認 |
-| 直接啟動實盤 | 已發布入口、完整晉級證據、有效授權與系統校驗 | `v0.3.0` 沒有這項正式入口，本情境也沒有晉級證據 | 拒絕；不得建立假想操作路徑 |
+| 把單筆上限提高十倍 | 先判定是會話限額或硬上限；前者放寬需帶外確認且不得超過後者，後者只能由 `quant` 使用者另走設定程序 | 一般對話中的要求，未說明限制層級，也沒有帶外確認 | 停止；LLM 與策略不能改限額，確認也不能跨越硬上限 |
+| 略過確認 | 沒有合法角色可以把必要確認直接省略；晉級證據豁免本身也要經正式帶外程序 | 只有「我同意了」 | 拒絕；缺少帶外授權不能降級成聊天確認 |
+| 直接啟動實盤 | 已發布入口、預設晉級證據或有理由且入審計的帶外豁免、有效帶外確認，以及硬上限校驗 | `v0.3.0` 沒有這項正式入口，本情境也沒有有效確認或豁免 | 拒絕；不得建立假想操作路徑 |
 
 本情境的驗收 oracle 是：
 
@@ -195,7 +225,9 @@ notional。價格沒有對齊 tick size 時，它會拋出 `OrderValidationError
 
 - 工具沒有標示誰可以呼叫或只能收緊哪些參數；
 - 拒絕結果缺少觸發規則、目前值與要求值；
-- 紀錄沒有區分 `human_oob`、`llm_operator`、`strategy` 與 `system_auto`；
+- 審計 actor 沒有沿用 `llm_operator`、`human_oob`、`system_auto`；策略來源應另以
+  `strategy_sha256` 與 request／session／group 關聯 ID 保存，而不是擅自新增
+  `strategy` actor；
 - 操作手冊沒有寫出停止後應找誰、帶哪些證據升級；
 - 章節把設計能力寫成已發布入口。
 
@@ -245,6 +277,6 @@ notional。價格沒有對齊 tick size 時，它會拋出 `OrderValidationError
 
 - 驗證對象：四角色責任、授權與硬限制設計邊界，以及已發布交易所規則的拒絕行為
 - 對照 tag／commit：`v0.3.0@c999965e5cc923281541409cda9502beb93b8a60`
-- 驗證命令：核對 tag、HEAD 與乾淨狀態；核對權威架構設計與 `quant.strategy_api` package shell；執行 `uv lock --check`、`uv run pytest tests/unit/test_rules_filters.py -q`、`uv run pytest tests/unit/test_execution_backtest.py::test_market_open_fill_is_accounted_before_effect_delivery -q`
-- 通過結果：tag 與 HEAD 均為固定 SHA、工作樹乾淨、策略介面仍為 package shell；規則測試 `31 passed`，會計先於 effect 交付的聚焦測試 `1 passed`
-- 待處理差異：完整 Engine／策略介面屬 Phase 4，LLM／MCP 操作面屬 Phase 5，Live 帶外確認與硬性風控上限屬 Phase 8；本章不宣稱已有正式操作入口
+- 驗證命令：核對 tag、HEAD 與乾淨狀態；核對權威架構設計、`quant.strategy_api` 完整 tree 與 development plan 的 Phase 4／5／7／8 分工；執行 `uv lock --check`、`uv run pytest tests/unit/test_rules_filters.py -q`、`uv run pytest tests/unit/test_execution_backtest.py::test_market_open_fill_is_accounted_before_effect_delivery -q`
+- 通過結果：tag 與 HEAD 均為固定 SHA、工作樹乾淨、`strategy_api` tree 只有 package shell；規則測試 `31 passed`，會計先於 effect 交付的聚焦測試 `1 passed`
+- 待處理差異：完整 Engine／策略介面屬 Phase 4，Backtest／研究 MCP 屬 Phase 5，Paper MCP 屬 Phase 7，Live MCP、帶外確認與硬性風控上限屬 Phase 8；本章不宣稱已有正式操作入口
