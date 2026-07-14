@@ -601,14 +601,15 @@ GitHub Issues 記錄即時完成狀態。三者不一致時採較嚴格限制，
 
 > 目前唯一啟用的寫作批次：W1
 >
-> 目前 active gate：`W1-G0`
+> 目前 active gate：`W1-G1`
 >
-> 最後核准日期：2026-07-12
+> 最後核准日期：2026-07-14
 >
-> 核准來源：使用者明確指示；追蹤 Issue #35
+> 核准來源：使用者明確指示；追蹤 Issue #43
 >
-> 前一 gate 完成證據：不適用（W1 起始 gate；進入證據：#31／PR #32 @
-> `ab149f8`、#33／PR #34 @ `30a9bad`）
+> 前一 gate 完成證據：`W1-G0` — Issue #8／PR #37 @ `33c4cf2`、Issue #7
+> 台帳骨架／PR #39 @ `a775200`；詳細驗證：Meta Issue #1 退出證據留言與
+> Issue #7 合併證據留言
 
 只有 default branch `main` 已合併的 active gate 宣告有效；feature branch、舊分支
 或未合併 PR 中的 gate 文字都只是提案，不能解鎖新工作。
