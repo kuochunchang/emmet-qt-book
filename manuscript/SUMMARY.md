@@ -7,7 +7,7 @@
 
 - [專業不是預測準，而是能對決定負責](chapters/01-professional-evidence.md)
 - [你的四位工作夥伴：人類、LLM、策略與系統](chapters/02-human-llm-strategy-system.md)
-- [從研究到實盤：能力地圖與晉級關卡]()
+- [從研究到實盤：能力地圖與晉級關卡](chapters/03-research-to-live-gates.md)
 - [第一個受控實驗：先取得一份可以解釋的結果]()
 
 # 第二篇　先理解怎麼賺，也理解怎麼虧

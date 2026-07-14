@@ -312,3 +312,102 @@ revalidation_triggers = [
   "第 2 章對已發布硬邊界類比的敘述改變",
   "配套基線 tag 或 commit 改變",
 ]
+
+[[records]]
+id = "ch03-v030-progression-evidence"
+batch = "W1"
+document = "manuscript/chapters/03-research-to-live-gates.md"
+chapter = "從研究到實盤：能力地圖與晉級關卡"
+claim = "配套權威設計採回測、Walk-Forward、穩健性、壓力、Paper、Testnet 冒煙與小額 Live 的漸進式驗證，並明確限制 Paper、Testnet 與小額實盤各自的證據能力。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項核對工作流程與環境證據邊界，不使用市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項核對已發布權威設計，不把設計中的後續工具名稱當成 v0.3.0 正式入口或 schema。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:docs/quantitative-trading-system-design.md",
+  "repo:emmet-qt-bt1:docs/development-plan.md",
+]
+verification_commands = [
+  "git grep -n -F '渐进式验证' HEAD -- docs/quantitative-trading-system-design.md",
+  "git grep -n -F '稳健性关卡插在 walk-forward 之后、Paper 之前' HEAD -- docs/quantitative-trading-system-design.md",
+  "git grep -n -F 'Paper 验证策略逻辑与工程链路' HEAD -- docs/quantitative-trading-system-design.md",
+  "git grep -n -F 'Testnet 模式的用途严格限定为 API 链路冒烟' HEAD -- docs/quantitative-trading-system-design.md",
+  "git grep -n -F '步骤 12（小额实盘）**由用户裁决是否执行**' HEAD -- docs/development-plan.md",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "渐进式验证",
+  "稳健性关卡插在 walk-forward 之后、Paper 之前",
+  "Paper 验证策略逻辑与工程链路",
+  "Testnet 模式的用途严格限定为 API 链路冒烟",
+  "步骤 12（小额实盘）**由用户裁决是否执行**",
+]
+result = "pass"
+observed = "設計依序要求回測、Walk-Forward、穩健性／壓力、Paper、Testnet 冒煙與小額 Live；Paper 只驗策略邏輯與工程鏈路，Testnet 價／倉／PnL 不作決策，小額實盤由人類裁決。"
+known_differences = [
+  "本筆只支持概念順序與證據邊界，不證明 v0.3.0 已交付 Backtest、Paper、Testnet 或 Live 正式入口。",
+]
+verified_on = "2026-07-14"
+revalidation_triggers = [
+  "第 3 章六階段順序、能證明／不能證明或晉級判準改變",
+  "Paper、Testnet 或 Live 的權威證據邊界改變",
+  "配套基線 tag 或 commit 改變",
+]
+
+[[records]]
+id = "ch03-v030-delivery-boundary"
+batch = "W1"
+document = "manuscript/chapters/03-research-to-live-gates.md"
+chapter = "從研究到實盤：能力地圖與晉級關卡"
+claim = "v0.3.0 的 backtest、mcp、paper、live 與 strategy_api 完整 source tree 各只有一個 __init__.py；開發計畫把完整策略介面、Backtest／MCP、Paper、Live 與系統驗收排在 Phase 4、5、7、8、9，不能由 package 名稱推論正式入口已交付。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項核對發布 tree 與 Phase 邊界，不使用市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：核對結果正是相關正式入口尚未在 v0.3.0 交付；package shell 與開發計畫不得冒充入口或 schema。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:docs/development-plan.md",
+  "repo:emmet-qt-bt1:src/quant/backtest/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/live/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/mcp/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/paper/__init__.py",
+  "repo:emmet-qt-bt1:src/quant/strategy_api/__init__.py",
+]
+verification_commands = [
+  "git grep -n -F '| 4 | 引擎层' HEAD -- docs/development-plan.md",
+  "git grep -n -F '| 5 | Backtest Server' HEAD -- docs/development-plan.md",
+  "git grep -n -F '| 7 | Paper Trading Server' HEAD -- docs/development-plan.md",
+  "git grep -n -F '| 8 | Live Trading Server' HEAD -- docs/development-plan.md",
+  "git grep -n -F '| 9 | 系统级验收' HEAD -- docs/development-plan.md",
+  "test \"$(git ls-tree -r --name-only HEAD -- src/quant/backtest src/quant/live src/quant/mcp src/quant/paper src/quant/strategy_api | wc -l)\" -eq 5",
+  "git ls-tree -r --name-only HEAD -- src/quant/backtest src/quant/live src/quant/mcp src/quant/paper src/quant/strategy_api",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "| 4 | 引擎层",
+  "| 5 | Backtest Server",
+  "| 7 | Paper Trading Server",
+  "| 8 | Live Trading Server",
+  "| 9 | 系统级验收",
+  "src/quant/backtest/__init__.py",
+  "src/quant/live/__init__.py",
+  "src/quant/mcp/__init__.py",
+  "src/quant/paper/__init__.py",
+  "src/quant/strategy_api/__init__.py",
+]
+result = "pass"
+observed = "tree assertion 通過：五個 future-facing package 合計只有五個 __init__.py；開發計畫將完整能力排在 Phase 4／5／7／8／9。"
+known_differences = [
+  "v0.3.0 已發布的其他基礎模組與資料入口不在本 claim；本筆只判斷第 3 章涉及的完整策略、研究、Paper 與 Live 能力。",
+]
+verified_on = "2026-07-14"
+revalidation_triggers = [
+  "上述任一 package tree、正式入口或 release 狀態改變",
+  "開發 Phase 對應或第 3 章三項交付檢查改變",
+  "配套基線 tag 或 commit 改變",
+]
