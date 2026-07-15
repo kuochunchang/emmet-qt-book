@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">永續網格案例收益來源與失效條件圖</title>
+  <desc id="desc">網格收益候選來自價格反覆穿越格位並完成成交。檢查實際 fill、費用、資金費、庫存、未實現損益、剩餘掛單、流動性、保證金和強平；區間且全部通過才 continue，庫存接近上限時 reduce，單邊趨勢或權益與安全邊界失守時 no-go。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
+    <style>.title{font:700 28px sans-serif;fill:#0f172a}.head{font:700 19px sans-serif;fill:#0f172a}.body{font:16px sans-serif;fill:#1e293b}.small{font:14px sans-serif;fill:#334155}.box{stroke:#334155;stroke-width:2;rx:14}.arrow{stroke:#334155;stroke-width:3;fill:none;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1200" height="720" fill="#f8fafc"/>
+  <text x="600" y="42" text-anchor="middle" class="title">永續網格：已實現小利不能遮住庫存尾部</text>
+  <rect x="35" y="80" width="220" height="145" class="box" fill="#dbeafe"/>
+  <text x="145" y="115" text-anchor="middle" class="head">收益候選</text>
+  <text x="55" y="150" class="body">價格反覆穿越格位</text><text x="55" y="178" class="body">買低賣高完成循環</text><text x="55" y="206" class="body">realized PnL－成本</text>
+  <path d="M255 152 H295" class="arrow"/>
+  <rect x="295" y="80" width="220" height="145" class="box" fill="#e0f2fe"/>
+  <text x="405" y="115" text-anchor="middle" class="head">成立前提</text>
+  <text x="315" y="150" class="body">掛單有真實 fill 回報</text><text x="315" y="178" class="body">往返覆蓋 fees／funding</text><text x="315" y="206" class="body">最大庫存事先受限</text>
+  <path d="M515 152 H555" class="arrow"/>
+  <rect x="555" y="80" width="270" height="145" class="box" fill="#fef3c7"/>
+  <text x="690" y="115" text-anchor="middle" class="head">可觀測證據</text>
+  <text x="575" y="150" class="body">fills／average entry／fees</text><text x="575" y="178" class="body">realized／unrealized／equity</text><text x="575" y="206" class="body">open orders／margin／mark</text>
+  <path d="M825 152 H865" class="arrow"/>
+  <rect x="865" y="80" width="300" height="145" class="box" fill="#dcfce7"/>
+  <text x="1015" y="115" text-anchor="middle" class="head">區間且通過：continue</text>
+  <text x="885" y="150" class="body">兩次循環：2/2 wins</text><text x="885" y="178" class="body">平倉 equity 1,003.6784</text><text x="885" y="206" class="body">只限本次固定 fills</text>
+  <path d="M405 225 V300" class="arrow"/>
+  <rect x="220" y="300" width="370" height="155" class="box" fill="#ffedd5"/>
+  <text x="405" y="335" text-anchor="middle" class="head">庫存接近限額 → reduce</text>
+  <text x="245" y="372" class="body">連續買進；inventory 與 open bids 增加</text><text x="245" y="402" class="body">取消新增意圖並降低庫存</text><text x="245" y="432" class="small">取消成功仍需正式回報</text>
+  <path d="M690 225 V300" class="arrow"/>
+  <rect x="630" y="300" width="535" height="155" class="box" fill="#fee2e2"/>
+  <text x="897" y="335" text-anchor="middle" class="head">單邊趨勢／安全失效 → no-go</text>
+  <text x="655" y="372" class="body">0.03 BTC；UPnL -48；2/2 wins 但 equity 955.4432</text><text x="655" y="402" class="body">mark／深度／margin／強平失守：停止</text><text x="655" y="432" class="small">勝率不得覆寫總權益與風控</text>
+  <rect x="220" y="500" width="945" height="125" class="box" fill="#f1f5f9"/>
+  <text x="692" y="536" text-anchor="middle" class="head">不只看 win rate：每輪必看欄位</text>
+  <text x="255" y="576" class="body">inventory　average entry　unrealized　equity　open orders　funding／fees　liquidity　margin／liquidation</text>
+  <text x="600" y="684" text-anchor="middle" class="small">固定教學風險圖；LIMIT／maker 意圖不等於成交，不代表策略績效或投資建議</text>
+</svg>

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">期現資金費率案例收益來源與失效條件圖</title>
+  <desc id="desc">收益候選由基差收斂價格損益加資金費再減成本。依序檢查兩腿成交、淨敞口、基差與資金費、流動性、雙錢包、保證金和強平緩衝；失衡時 reduce，假設或安全邊界失效時 no-go，全部通過才有條件 continue。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
+    <style>.title{font:700 28px sans-serif;fill:#0f172a}.head{font:700 19px sans-serif;fill:#0f172a}.body{font:16px sans-serif;fill:#1e293b}.small{font:14px sans-serif;fill:#334155}.box{stroke:#334155;stroke-width:2;rx:14}.arrow{stroke:#334155;stroke-width:3;fill:none;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1200" height="720" fill="#f8fafc"/>
+  <text x="600" y="42" text-anchor="middle" class="title">期現資金費率：中性只是一項待驗證條件</text>
+  <rect x="35" y="80" width="220" height="145" class="box" fill="#dbeafe"/>
+  <text x="145" y="115" text-anchor="middle" class="head">收益候選</text>
+  <text x="55" y="150" class="body">基差收斂價格 PnL</text><text x="55" y="178" class="body">＋ funding 現金流</text><text x="55" y="206" class="body">－ fees／spread／滑點</text>
+  <path d="M255 152 H295" class="arrow"/>
+  <rect x="295" y="80" width="220" height="145" class="box" fill="#e0f2fe"/>
+  <text x="405" y="115" text-anchor="middle" class="head">成立前提</text>
+  <text x="315" y="150" class="body">兩腿同時點、同數量</text><text x="315" y="178" class="body">Q_net 在限額內</text><text x="315" y="206" class="body">basis／funding 假設仍在</text>
+  <path d="M515 152 H555" class="arrow"/>
+  <rect x="555" y="80" width="260" height="145" class="box" fill="#fef3c7"/>
+  <text x="685" y="115" text-anchor="middle" class="head">可觀測證據</text>
+  <text x="575" y="150" class="body">每腿 fill／fee／time</text><text x="575" y="178" class="body">basis／funding time／mark</text><text x="575" y="206" class="body">雙錢包／深度／margin</text>
+  <path d="M815 152 H855" class="arrow"/>
+  <rect x="855" y="80" width="310" height="145" class="box" fill="#dcfce7"/>
+  <text x="1010" y="115" text-anchor="middle" class="head">全部通過：有條件 continue</text>
+  <text x="875" y="150" class="body">Q_net=0；basis 200→50</text><text x="875" y="178" class="body">固定案例 net +5.3440</text><text x="875" y="206" class="body">持續監控，不能外推</text>
+  <path d="M405 225 V300" class="arrow"/>
+  <rect x="220" y="300" width="370" height="155" class="box" fill="#ffedd5"/>
+  <text x="405" y="335" text-anchor="middle" class="head">失衡事件 → reduce</text>
+  <text x="245" y="372" class="body">單腿未成交／部分成交；Q_net ≠ 0</text><text x="245" y="402" class="body">停止新增曝險，處理殘留腿</text><text x="245" y="432" class="small">取消／補救仍需正式回報與授權</text>
+  <path d="M685 225 V300" class="arrow"/>
+  <rect x="630" y="300" width="535" height="155" class="box" fill="#fee2e2"/>
+  <text x="897" y="335" text-anchor="middle" class="head">假設或安全邊界失效 → no-go</text>
+  <text x="655" y="372" class="body">basis 擴大／funding 反轉／成本吞噬收益／深度不足</text><text x="655" y="402" class="body">wallet、margin 或強平緩衝失守：停止收益候選</text><text x="655" y="432" class="small">保存原因、版本、時點與重驗條件</text>
+  <rect x="220" y="500" width="945" height="125" class="box" fill="#f1f5f9"/>
+  <text x="692" y="536" text-anchor="middle" class="head">Q_net=0 永遠不能刪掉的風險</text>
+  <text x="255" y="576" class="body">基差　兩腿執行　資金費反轉　流動性／容量　雙錢包　保證金／強平　下架／規則變更</text>
+  <text x="600" y="684" text-anchor="middle" class="small">固定教學風險圖；不是即時市場、成交保證、策略績效或投資建議</text>
+</svg>

@@ -1,14 +1,15 @@
 # B. 交易損益與衍生品公式
 
-本附錄目前只收錄第 5–8 章直接需要的現貨名義價值、部位、已實現／未實現損益、
+本附錄目前只收錄第 5–9 章直接需要的現貨名義價值、部位、已實現／未實現損益、
 標記權益、交易成本、換手率與損益兩平公式，以及 U 本位線性永續的 signed
-position、名義價值、未實現損益、資金費現金流、槓桿、保證金與強平邊界。多腿
-淨敞口會隨對應 active 正文補寫；尚未出現的公式不應由讀者自行推測成系統行為。
+position、名義價值、未實現損益、資金費現金流、槓桿、保證金、強平邊界，與
+期現兩腿淨敞口、基差／組合 PnL 及單向永續網格最小帳本。
 
 正文的安全判斷與完整案例見[第 5 章](../chapters/05-spot-trade-ledger.md)、
 [第 6 章](../chapters/06-costs-breakeven.md)與
 [第 7 章](../chapters/07-perpetual-dual-wallet-funding.md)，以及
-[第 8 章](../chapters/08-leverage-margin-liquidation.md)。本頁是符號、單位與
+[第 8 章](../chapters/08-leverage-margin-liquidation.md)和
+[第 9 章](../chapters/09-two-strategy-risk-maps.md)。本頁是符號、單位與
 適用前提的延伸查表，不能取代逐格資產流、成本稽核、雙錢包或強平邊界核對。
 
 ## 符號與單位
@@ -51,6 +52,15 @@ position、名義價值、未實現損益、資金費現金流、槓桿、保證
 | `MM` | 維持保證金 | quote asset | `N_perp × MMR - A` |
 | `MB` | 保證金餘額 | quote asset | Cross／Isolated 的分子集合不同 |
 | `MR` | 保證金率 | 無單位 | `MM / MB`；`MB <= 0` 時未定義 |
+| `Q_spot` | 期現案例的現貨帶方向數量 | base asset | 多頭 `>0`；本章無借貸現貨不允許負餘額 |
+| `S_t`、`P_t` | 時點 `t` 的現貨／永續參考價 | quote/base | 同標的、同時點且來源可比 |
+| `B_t` | 永續減現貨的基差 | quote/base | `B_t=P_t-S_t`，可正、零或負 |
+| `Q_net` | 現貨與永續共同方向淨數量 | base asset | `Q_spot+Q_perp`；為零不消除其他風險 |
+| `K_price` | 參考價到實際成交價的 spread／滑點歸因 | quote asset | fill PnL 已使用時不得再扣 |
+| `Q_grid` | 單向永續網格的成交後 signed inventory | base asset | 未成交掛單不先加入此欄 |
+| `p_avg` | 當前同方向庫存加權平均成本 | quote/base | 平倉為零時不適用 |
+| `R_grid` | 網格已平倉數量的累計 realized PnL | quote asset | 不含未實現 PnL 與費用 |
+| `W_grid` | 網格期貨 wallet balance | quote asset | 已包含 realized PnL 與已扣費用 |
 | `p_liq` | 模型強平價格邊界 | quote/base | 必須為正且通過檔位／身分核對 |
 
 `quote/base` 是單位比值。例如 `USDT/BTC × BTC = USDT`。若乘法後單位無法消成
@@ -323,6 +333,58 @@ MB(p_liq) = total MM(p_liq)
 symbol、market、mark 時點與分層表身分相符
 ```
 
+## 期現兩腿：基差、淨敞口與組合 PnL
+
+第 9 章採同一 base asset 的現貨多頭與 U 本位線性永續空頭。用相同 base 單位記錄：
+
+```text
+Q_net = Q_spot + Q_perp                            [base]
+B_t = P_t - S_t                                    [quote/base]
+PnL_spot,ref = (S_1 - S_0) × Q_spot               [quote]
+PnL_perp,ref = (P_1 - P_0) × Q_perp               [quote]
+PnL_price,ref = PnL_spot,ref + PnL_perp,ref        [quote]
+```
+
+在 `Q_spot=q`、`Q_perp=-q` 的完整數量對沖下：
+
+```text
+PnL_price,ref = (B_0 - B_1) × q                    [quote]
+```
+
+這只把共同方向價格項消掉；若 `Q_net != 0`，仍留下方向曝險。即使 `Q_net=0`，
+基差、兩腿成交、funding、費用、流動性、兩錢包、保證金與強平風險仍存在。
+
+```text
+PnL_fill = PnL_price,ref - K_price
+PnL_net = PnL_fill + Σ CF_funding - Σ fees
+```
+
+若 `PnL_fill` 已直接由實際成交價計算，`K_price` 只用於歸因，不能再扣一次。
+
+## 單向永續網格：平均成本、realized、unrealized 與 equity
+
+增加同方向數量 `q` 時：
+
+```text
+Q_after = Q_before + q
+p_avg,after =
+  (abs(Q_before) × p_avg,before + abs(q) × p_fill)
+  / abs(Q_after)
+```
+
+以既有方向平倉 `q_close`：
+
+```text
+ΔR_grid = (p_close - p_avg,before) × q_close × sign(Q_before)
+W_after = W_before + ΔR_grid - fee
+U_grid = (m - p_avg) × Q_grid
+E_grid = W_grid + U_grid
+E_grid - E_initial = R_grid - Σ fees + Σ funding + U_grid
+```
+
+最後一式要求 realized、fee 與 funding 只入帳一次。未成交掛單不先改 inventory、
+平均成本或 wallet，但要另算全數成交後的 worst-open-order exposure。
+
 `v0.3.0` 以當前 mark notional 選檔，不做候選強平價跨檔 fixed-point 迭代。第 8 章
 固定案例的候選價仍在同一第一檔；其他案例若跨檔，必須揭露模型限制，不能把公式
 外推成交易所精確邊界。所有等式用未捨入 Decimal 核對，顯示值才套用捨入。
@@ -336,8 +398,8 @@ symbol、market、mark 時點與分層表身分相符
 - 期望值、勝率、賠率與容量查表見附錄 C；本附錄不把績效統計塞進資產流公式。
 - maker／taker、bid／ask、滑點與容量的市場語義查表見附錄 D。
 - 本頁的費率與計費資產是明示情境輸入，不代表任何帳戶的現行交易所費率。
-- 本頁的永續範圍只到第 8 章公式；仍不包含 ADL、下架、多腿、多資產模式、
-  保險基金結算、完整訂單成本或稅務成本。
+- 本頁的永續範圍只到第 9 章的兩腿／網格最小公式；仍不包含 ADL、下架、多資產
+  模式、保險基金結算、完整訂單成本、稅務成本或已發布的多腿協調／網格策略入口。
 - `m` 是現貨估值輸入；`m_f` 是指定 funding time 的永續標記價格。兩者都不保證
   可以成交，也不能互相偷換。
 - 現貨 `Q` 與永續 `Q_perp` 的符號前提不同；方向記法本身不提供借貸、槓桿、
