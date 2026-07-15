@@ -1,14 +1,15 @@
 # B. 交易損益與衍生品公式
 
-本附錄目前只收錄第 5–7 章直接需要的現貨名義價值、部位、已實現／未實現損益、
+本附錄目前只收錄第 5–8 章直接需要的現貨名義價值、部位、已實現／未實現損益、
 標記權益、交易成本、換手率與損益兩平公式，以及 U 本位線性永續的 signed
-position、名義價值、未實現損益與資金費現金流。槓桿、保證金、強平與多腿淨
-敞口會隨對應 active 正文補寫；尚未出現的公式不應由讀者自行推測成系統行為。
+position、名義價值、未實現損益、資金費現金流、槓桿、保證金與強平邊界。多腿
+淨敞口會隨對應 active 正文補寫；尚未出現的公式不應由讀者自行推測成系統行為。
 
 正文的安全判斷與完整案例見[第 5 章](../chapters/05-spot-trade-ledger.md)、
 [第 6 章](../chapters/06-costs-breakeven.md)與
-[第 7 章](../chapters/07-perpetual-dual-wallet-funding.md)。本頁是符號、單位與
-適用前提的延伸查表，不能取代逐格資產流、成本稽核或雙錢包核對。
+[第 7 章](../chapters/07-perpetual-dual-wallet-funding.md)，以及
+[第 8 章](../chapters/08-leverage-margin-liquidation.md)。本頁是符號、單位與
+適用前提的延伸查表，不能取代逐格資產流、成本稽核、雙錢包或強平邊界核對。
 
 ## 符號與單位
 
@@ -42,6 +43,15 @@ position、名義價值、未實現損益與資金費現金流。槓桿、保證
 | `q_net` | 扣除 base 計價買入費後可賣數量 | base asset | `q_net = q × (1-r_buy)` |
 | `K` | 一個完整往返的總成本 | quote asset | 成本歸因不可和現金流重複扣除 |
 | `T` | 本附錄定義的單輪換手率 | 無單位 | 分母必須明示為初始權益 |
+| `L` | 永續部位選定槓桿 | 無單位 | 正數；不直接乘進 PnL |
+| `m_risk` | 風險重估用標記價格 | quote/base | 必須帶時點、為正且未過期 |
+| `IM_position` | Emmet 持倉初始保證金 target | quote asset | `abs(Q_perp) × p_entry,perp / L` |
+| `MMR` | 當前名義價值檔位的維持保證金率 | 無單位 | 必須綁定 symbol 與分層快照 |
+| `A` | 維持保證金速算額（maint amount／cum） | quote asset | 由同一檔位提供 |
+| `MM` | 維持保證金 | quote asset | `N_perp × MMR - A` |
+| `MB` | 保證金餘額 | quote asset | Cross／Isolated 的分子集合不同 |
+| `MR` | 保證金率 | 無單位 | `MM / MB`；`MB <= 0` 時未定義 |
+| `p_liq` | 模型強平價格邊界 | quote/base | 必須為正且通過檔位／身分核對 |
 
 `quote/base` 是單位比值。例如 `USDT/BTC × BTC = USDT`。若乘法後單位無法消成
 報價資產，通常代表交易對或公式方向讀反。
@@ -269,17 +279,70 @@ E_futures = W_after + U_perp
 不能加進權益。產品模式與雙錢包最小查表見
 [附錄 E](e-perpetual-binance-mechanics.md)。
 
+## U 本位線性永續：槓桿、保證金與強平邊界
+
+本節只對齊第 8 章與 Emmet `v0.3.0` 的固定單向持倉模型。以帶方向數量
+`Q_perp`、開倉均價 `p_entry,perp` 與當前標記價格 `m_risk` 定義：
+
+```text
+N_perp = abs(Q_perp) × m_risk
+U_perp = (m_risk - p_entry,perp) × Q_perp
+IM_position = abs(Q_perp) × p_entry,perp / L
+MM = N_perp × MMR - A
+```
+
+`IM_position` 是 Emmet 的持倉 target；訂單 admission 還可能需要 reservation、
+open loss 與費用，不能把這一式冒充完整開倉成本。`Q_perp`、entry 與 mark 不變
+時，改 `L` 只改 target，不改 `N_perp` 或 `U_perp`。
+
+Isolated 與 Cross 的保證金餘額為：
+
+```text
+MB_isolated = isolated_margin + U_this
+MB_cross = cross_wallet_balance + Σ U_cross
+MR = Σ MM / MB                         （只在 MB > 0 時定義）
+```
+
+`MB <= 0` 時 `MR` 未定義，必須 fail closed，不能讓負比率進入正常門檻比較。
+
+令 `TMM_other`、`U_other` 分別為其他 Cross 部位的維持保證金與未實現 PnL：
+
+```text
+p_liq =
+  (W - TMM_other + U_other + A - Q_perp × p_entry,perp)
+  / (abs(Q_perp) × MMR - Q_perp)
+```
+
+Cross 的 `W` 是 cross wallet balance；Isolated 則以該部位 isolated margin 代入，
+並令 `TMM_other=0`、`U_other=0`。有效答案還要滿足：
+
+```text
+Q_perp != 0
+p_liq > 0
+MB(p_liq) = total MM(p_liq)
+symbol、market、mark 時點與分層表身分相符
+```
+
+`v0.3.0` 以當前 mark notional 選檔，不做候選強平價跨檔 fixed-point 迭代。第 8 章
+固定案例的候選價仍在同一第一檔；其他案例若跨檔，必須揭露模型限制，不能把公式
+外推成交易所精確邊界。所有等式用未捨入 Decimal 核對，顯示值才套用捨入。
+
+多頭可用 `(m_risk-p_liq)/m_risk`、空頭可用
+`(p_liq-m_risk)/m_risk` 記錄當前價格緩衝，但這只是固定模型下的距離，不是最大
+回撤、成交滑點或 risk-of-ruin 機率。
+
 ## 適用邊界
 
 - 期望值、勝率、賠率與容量查表見附錄 C；本附錄不把績效統計塞進資產流公式。
 - maker／taker、bid／ask、滑點與容量的市場語義查表見附錄 D。
 - 本頁的費率與計費資產是明示情境輸入，不代表任何帳戶的現行交易所費率。
-- 本頁的永續範圍只到第 7 章公式；仍不包含槓桿、Cross／Isolated、初始／維持
-  保證金、強平、ADL、下架、多腿或稅務成本。
+- 本頁的永續範圍只到第 8 章公式；仍不包含 ADL、下架、多腿、多資產模式、
+  保險基金結算、完整訂單成本或稅務成本。
 - `m` 是現貨估值輸入；`m_f` 是指定 funding time 的永續標記價格。兩者都不保證
   可以成交，也不能互相偷換。
 - 現貨 `Q` 與永續 `Q_perp` 的符號前提不同；方向記法本身不提供借貸、槓桿、
   放空、帳戶模式切換或下單權限。
+- `p_liq` 是版本固定模型的風險邊界，不是保證成交價或交易所最終清算帳單。
 - 標記權益依估值價格改變；「資產流守恆」不表示權益數字固定。
 - 報價資產名稱不代表法幣存款、固定匯率或無風險資產。
 - 本附錄不提供會計、稅務或法律上的個別意見。
