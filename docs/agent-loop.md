@@ -18,14 +18,22 @@ Trusted runner、event-driven CLI 與手動單輪診斷的操作者步驟見
   單一 `events` manager 定期 polling GitHub、依本協定選出目前負責角色並通知。
 - 每個事件只啟動一次短生命週期 Codex role iteration；它最多完成一個可稽核的主要
   狀態轉移後退出。Role skill 與 Codex child 不 `sleep`、不輪詢、不遞迴啟動自己。
-- Event manager 只讀 GitHub 並送本機事件，不修改 GitHub、工作樹或 gate；所有 mutation
-  仍由收到事件後啟動的 dispatcher／coder／reviewer iteration 依其權限執行。
+- Event manager 只讀 GitHub 並送本機事件，不修改 GitHub durable state、候選工作樹
+  或 gate；所有 workflow mutation 仍由收到事件後啟動的角色依權限執行。唯一的本機
+  worktree mutation 是下述 trusted-control drain-and-rotate：manager 只交棒，不自行
+  checkout 或重啟。
+- Manager 每次 routing 前 fetch `origin/main` 並比對 control inputs。發現改變時停止
+  派送；有 child 先 drain，idle 後交給 launcher-owned detached rotator。Rotator 必須
+  驗證 events PID／lock、session ownership、same-repo 與乾淨 runners，停止 components
+  後才同步 runners，並由新 generation 執行四項 preflight 與重建 session。
 - GitHub Issue、PR、label、署名留言與 commit SHA 是 durable state；本機 session
   與 worktree 都可能中斷，下一輪必須先 reconciliation 才能開始新工作。Unix socket、
   event fingerprint 與 manager 記憶體中的 retry 狀態都不是 durable workflow state。
-- Role 從與最新 `origin/main` 一致的 trusted runner 載入 skill、AGENTS 與 Codex
-  project config；runner 不 checkout 候選分支。Coder／Reviewer 在另外的 task／candidate
-  worktree 作業，候選內容不能成為下一輪的控制指令。
+- Role 從 control inputs 與最新 `origin/main` 完全一致的 trusted runner 載入
+  skill、AGENTS 與 Codex project config。只有非 control paths 前進時，runner 的
+  detached HEAD 可在 session 內暫時落後；每個 role iteration 仍先 fetch 最新 main，
+  task／candidate worktree 也必須以該 snapshot 建立。Runner 不 checkout 候選分支，
+  候選內容不能成為下一輪控制指令。
 - 三個角色共用同一個 GitHub 帳號，因此不用 assignee 與 GitHub 原生 review
   approve。留言文末分別署名 `— Dispatcher`、`— Coder`、`— Reviewer`。
 
@@ -266,6 +274,8 @@ Codex。
 | --- | --- | --- |
 | `healthy` | `false` | durable state 合法且有明確 owner／下一步 |
 | `running` | `false` | 正好有一個 Codex iteration 執行中 |
+| `draining` | `false` | control inputs 已更新；停止派送並等待目前 child 結束 |
+| `rotating` | `false` | detached rotator 正在安全同步 runners 與重建 session |
 | `paused` | `true` | Meta Issue #1 的 `loop:paused` 正在阻止推進 |
 | `blocked` | `true` | state invariant、同時 busy、delivery 或 GitHub polling 有錯 |
 | `stalled` | `true` | owner iteration 已完成，但 durable workflow state 沒前進 |
@@ -297,9 +307,12 @@ Codex prompt，明示為資料而非指令；role 仍須重讀 GitHub live state
 `emmet-loop:dispatcher:alert:id=<ALERT_ID>:main=<MAIN_SHA>` marker 的單一 durable
 通知，列出證據、解除條件與需要的使用者決定。
 
-`operator-status` 本身仍是唯讀、非 durable 的操作者診斷；alert policy 只多喚醒既有
-dispatcher，不啟動第四個 agent，不自動 restart component、不移除 pause，也不授權
-繞過 approval。Manager 重啟後，本機 delivery、active-alert 與去重歷史可以消失，
+`operator-status` 本身仍是唯讀、非 durable 的操作者診斷；一般 alert policy 只多
+喚醒既有 dispatcher，不啟動第四個 agent、不自動 restart component、不移除 pause，
+也不授權繞過 approval。唯一自動換代條件是 unpaused snapshot 下 control inputs 與
+最新 `origin/main` 不同；它只使用上述 drain-and-rotate transaction，不把 child exit、
+no-progress 或圈外內容變更當成 restart 授權。Manager 重啟後，本機 delivery、
+active-alert 與去重歷史可以消失，
 所以可能重新告警；下一個 role iteration 仍須以 GitHub durable state 與 marker 冪等
 恢復。
 
@@ -360,6 +373,13 @@ JSON，便於同一份 log 稽核。
 啟動及每次 Codex iteration 前都 fetch `origin/main`，並拒絕非本 repo linked
 worktree、不同 origin，以及與 trusted ref 不同的 `.agents`／`.codex`／AGENTS／
 治理文件或 adapter。`--workdir` 只能指向同 repo trusted runner。
+
+只有非 control paths 改變時，`runner_head_matches=false` 不阻止下一輪；
+`control_inputs_match` 才是 long-lived generation 是否可繼續載入角色程序的判定。
+Control drift 時 manager 輸出 `health=draining|rotating`，不 ACK 尚未交付的 role
+event；rotator 的 `rotation-state.json` 與 `rotation.log` 只存在 mode 0700 runtime
+directory，並非 workflow durable state。Paused snapshot 不做本機換代；只由使用者解除
+`loop:paused` 後才重新判定。
 
 Agent component 持有 per-role `flock` 直到停止；child 繼承 lock FD，避免 parent
 異常退出時重疊；event manager 另持單一 `events` lock。第二個同角色 agent 或第二個

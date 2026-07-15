@@ -37,6 +37,7 @@ MAX_EVENT_BYTES = 64 * 1024
 MAX_COMPLETED_EVENTS = 4
 MAX_PANE_STATUS_CHARS = 48
 PANE_ID_PATTERN = re.compile(r"^%[0-9]+$")
+ROTATION_STATE_FILENAME = "rotation-state.json"
 EVENT_QUERY = """
 query EmmetLoopState($owner: String!, $name: String!, $search: String!) {
   repository(owner: $owner, name: $name) {
@@ -183,6 +184,10 @@ def operator_pane_status(
         return f"{prefix}：{alert_role}"
     if health == "paused":
         return "全域暫停"
+    if health == "draining":
+        return "換代：等待目前 iteration 結束"
+    if health == "rotating":
+        return "換代：同步 trusted runners"
     if health == "stalled":
         return f"停滯：{affected}" + (f"／{reference}" if reference else "")
     if health == "blocked":
@@ -1491,6 +1496,153 @@ def pull_request_disappeared(
     )
 
 
+def rotation_state_path(runtime_dir: Path) -> Path:
+    return runtime_dir / ROTATION_STATE_FILENAME
+
+
+def write_rotation_state(
+    path: Path,
+    **fields: object,
+) -> None:
+    """Atomically publish local-only runner rotation metadata."""
+
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    payload = {
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        **fields,
+    }
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
+def control_rotation_status(
+    snapshot: Mapping[str, object],
+    *,
+    busy: Sequence[str],
+    changes: Sequence[str],
+) -> dict[str, object]:
+    """Describe a safe drain or handoff before trusted controls rotate."""
+
+    objects = [
+        *snapshot.get("issues", []),
+        *snapshot.get("pull_requests", []),
+    ]
+    draining = bool(busy)
+    return {
+        "health": "draining" if draining else "rotating",
+        "blocking": False,
+        "owner": "operator",
+        "reason": "trusted-control-update",
+        "current": (
+            "偵測到 origin/main 的 loop control inputs 已更新；"
+            + (
+                "停止派送新事件，等待目前 Codex iteration 結束。"
+                if draining
+                else "準備交給 detached rotator 安全換代。"
+            )
+        ),
+        "next": (
+            "目前 iteration 結束後自動同步 trusted runners、執行 preflight "
+            "並重建 launcher-owned tmux session。"
+            if draining
+            else "detached rotator 會驗證 session ownership、同步 runners、"
+            "執行 preflight 並從 GitHub durable state 恢復。"
+        ),
+        "attention": ", ".join(changes),
+        "affected_role": busy[0] if busy else "operator",
+        "exit_code": None,
+        "workflow_fingerprint": workflow_state_fingerprint(snapshot),
+        "busy_roles": list(busy),
+        "objects": objects,
+    }
+
+
+def start_control_rotation(
+    options: argparse.Namespace,
+    *,
+    runtime_dir: Path,
+    common_dir: Path,
+    snapshot: Mapping[str, object],
+    changes: Sequence[str],
+) -> int:
+    """Spawn the local-only rotator and return without mutating GitHub state."""
+
+    control_root = adapter.REPOSITORY_ROOT.resolve()
+    launcher = control_root / "scripts" / "codex_loop_tmux.py"
+    if not launcher.is_file():
+        raise ValueError(f"找不到 trusted tmux rotator：{launcher}")
+    repository_root = (
+        options.repository_root.expanduser().resolve()
+        if options.repository_root is not None
+        else common_dir.parent.resolve()
+    )
+    state_path = rotation_state_path(runtime_dir)
+    log_path = runtime_dir / "rotation.log"
+    target_main = adapter._git_output(control_root, "rev-parse", adapter.TRUSTED_REF)
+    write_rotation_state(
+        state_path,
+        state="requested",
+        source_main=adapter._git_output(control_root, "rev-parse", "HEAD"),
+        target_main=target_main,
+        changed_control_paths=list(changes),
+        workflow_fingerprint=workflow_state_fingerprint(snapshot),
+        log=str(log_path),
+    )
+    command = [
+        sys.executable,
+        str(launcher),
+        "rotate",
+        "--repository-root",
+        str(repository_root),
+        "--session",
+        options.tmux_session,
+        "--tmux-bin",
+        options.tmux_bin,
+        "--wait-pid",
+        str(os.getpid()),
+        "--rotation-state",
+        str(state_path),
+        "--no-attach",
+        "--interval-seconds",
+        str(options.interval_seconds),
+        "--retry-seconds",
+        str(options.retry_seconds),
+        "--dispatcher-heartbeat-seconds",
+        str(options.dispatcher_heartbeat_seconds),
+    ]
+    if options.rotation_profile:
+        command.extend(["--profile", options.rotation_profile])
+    for role in adapter.ROLES:
+        selected_profile = getattr(options, f"rotation_{role}_profile")
+        if selected_profile:
+            command.extend([f"--{role}-profile", selected_profile])
+    try:
+        with log_path.open("a", encoding="utf-8") as log:
+            process = subprocess.Popen(
+                command,
+                cwd=control_root,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+    except OSError as error:
+        write_rotation_state(
+            state_path,
+            state="failed",
+            target_main=target_main,
+            detail=str(error),
+        )
+        raise ValueError(f"無法啟動 detached rotator：{error}") from error
+    return process.pid
+
+
 def _validate_manager_workdir(workdir: Path) -> tuple[Path, Path]:
     adapter.refresh_trusted_main(adapter.REPOSITORY_ROOT)
     control_root, control_common = adapter._git_root_and_common_dir(
@@ -1581,6 +1733,70 @@ def run_events(options: argparse.Namespace) -> int:
                 now = time.monotonic()
                 agent_states = read_agent_states(runtime_dir)
                 busy = busy_roles(runtime_dir)
+                control_changes: list[str] = []
+                if snapshot.get("paused") is not True:
+                    adapter.refresh_trusted_main(adapter.REPOSITORY_ROOT)
+                    control_changes = adapter.control_input_changes(
+                        adapter.REPOSITORY_ROOT
+                    )
+                if control_changes:
+                    rotation_status = control_rotation_status(
+                        snapshot,
+                        busy=busy,
+                        changes=control_changes,
+                    )
+                    emit(
+                        component="events",
+                        result="operator-status",
+                        repository=repo,
+                        polled_at=time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                        ),
+                        **rotation_status,
+                    )
+                    set_title(operator_pane_status(rotation_status))
+                    if busy:
+                        emit(
+                            component="events",
+                            result="poll-complete",
+                            paused=False,
+                            busy_roles=busy,
+                            decisions=[],
+                            rotation_pending=True,
+                        )
+                        if options.once or options.dry_run:
+                            break
+                        deadline = time.monotonic() + options.interval_seconds
+                        while (
+                            not stop_requested
+                            and time.monotonic() < deadline
+                        ):
+                            time.sleep(
+                                min(1.0, deadline - time.monotonic())
+                            )
+                        continue
+                    if options.dry_run:
+                        emit(
+                            component="events",
+                            result="would-rotate",
+                            changed_control_paths=control_changes,
+                        )
+                        break
+                    rotator_pid = start_control_rotation(
+                        options,
+                        runtime_dir=runtime_dir,
+                        common_dir=common_dir,
+                        snapshot=snapshot,
+                        changes=control_changes,
+                    )
+                    emit(
+                        component="events",
+                        result="rotation-handoff",
+                        rotator_pid=rotator_pid,
+                        changed_control_paths=control_changes,
+                    )
+                    set_title("換代：handoff 完成")
+                    return 0
                 stalled = detect_stalled_iteration(
                     snapshot,
                     deliveries=delivered,
@@ -1856,6 +2072,22 @@ def parser() -> argparse.ArgumentParser:
     events.add_argument("--gh-bin", default="gh")
     events.add_argument("--tmux-title", action="store_true", help=argparse.SUPPRESS)
     events.add_argument("--tmux-bin", default="tmux", help=argparse.SUPPRESS)
+    events.add_argument(
+        "--tmux-session",
+        default="emmet-qt-book-loop",
+        help=argparse.SUPPRESS,
+    )
+    events.add_argument(
+        "--repository-root", type=Path, help=argparse.SUPPRESS
+    )
+    events.add_argument(
+        "--rotation-profile", help=argparse.SUPPRESS
+    )
+    for role in adapter.ROLES:
+        events.add_argument(
+            f"--rotation-{role}-profile",
+            help=argparse.SUPPRESS,
+        )
     events.add_argument("--repo")
     events.add_argument("--runtime-dir", type=Path)
     events.add_argument(

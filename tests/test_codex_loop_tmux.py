@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import io
+import json
 import os
 from pathlib import Path
 import signal
@@ -29,9 +30,14 @@ class CodexLoopTmuxTests(unittest.TestCase):
     def test_parser_exposes_explicit_lifecycle(self) -> None:
         parser = launcher.parser()
         self.assertEqual("start", parser.parse_args([]).action)
-        for action in ("start", "restart", "stop", "status"):
+        for action in ("start", "restart", "stop", "status", "rotate"):
             with self.subTest(action=action):
                 self.assertEqual(action, parser.parse_args([action]).action)
+        rotate = parser.parse_args(
+            ["rotate", "--repository-root", "/repo", "--wait-pid", "42"]
+        )
+        self.assertEqual(Path("/repo"), rotate.repository_root)
+        self.assertEqual(42, rotate.wait_pid)
         with (
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit),
@@ -88,6 +94,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 self.assertEqual(["--profile", "loop"], commands[role][-2:])
                 self.assertNotIn("--model", commands[role])
         self.assertNotIn("--profile", commands["events"])
+        self.assertIn("--rotation-profile", commands["events"])
+        self.assertIn("--tmux-session", commands["events"])
+        self.assertIn("--repository-root", commands["events"])
         for command in commands.values():
             self.assertIn("--tmux-title", command)
             self.assertIn("--tmux-bin", command)
@@ -117,6 +126,13 @@ class CodexLoopTmuxTests(unittest.TestCase):
             commands["reviewer"][-2:],
         )
         self.assertNotIn("--profile", commands["events"])
+        for role, selected in (
+            ("dispatcher", "loop-dispatcher"),
+            ("coder", "loop"),
+            ("reviewer", "loop-reviewer"),
+        ):
+            self.assertIn(f"--rotation-{role}-profile", commands["events"])
+            self.assertIn(selected, commands["events"])
 
     def test_profile_files_must_exist_and_contain_valid_toml(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -295,6 +311,112 @@ class CodexLoopTmuxTests(unittest.TestCase):
             ],
             kill.call_args_list,
         )
+
+    def test_rotate_session_verifies_stops_syncs_and_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repository_root = base / "repo"
+            common_dir = repository_root / ".git"
+            common_dir.mkdir(parents=True)
+            runners = launcher.runner_workdirs(repository_root)
+            adapter_path = runners["dispatcher"] / "scripts" / "codex-loop"
+            adapter_path.parent.mkdir(parents=True)
+            adapter_path.write_text("#!/bin/sh\n", encoding="utf-8")
+            adapter_path.chmod(0o755)
+            state_path = base / "runtime" / "rotation-state.json"
+            options = launcher.parser().parse_args(
+                [
+                    "rotate",
+                    "--repository-root",
+                    str(repository_root),
+                    "--session",
+                    "test-loop",
+                    "--wait-pid",
+                    "123",
+                    "--rotation-state",
+                    str(state_path),
+                    "--no-attach",
+                    "--dispatcher-profile",
+                    "loop-dispatcher",
+                    "--reviewer-profile",
+                    "loop-reviewer",
+                ]
+            )
+            order: list[str] = []
+
+            with (
+                mock.patch.object(
+                    launcher, "session_exists", return_value=True
+                ),
+                mock.patch.object(
+                    launcher,
+                    "verify_owned_session",
+                    side_effect=lambda *_args: order.append("owned"),
+                ),
+                mock.patch.object(
+                    launcher,
+                    "verify_rotation_parent",
+                    side_effect=lambda *_args: order.append("parent"),
+                ),
+                mock.patch.object(
+                    launcher,
+                    "wait_for_lock_release",
+                    side_effect=lambda *_args: order.append("wait"),
+                ),
+                mock.patch.object(
+                    launcher,
+                    "stop_existing_components",
+                    side_effect=lambda *_args, **_kwargs: order.append("stop"),
+                ),
+                mock.patch.object(
+                    launcher,
+                    "tmux_command",
+                    side_effect=lambda *_args, **_kwargs: (
+                        order.append("kill") or self.completed()
+                    ),
+                ),
+                mock.patch.object(
+                    launcher,
+                    "prepare_runners",
+                    side_effect=lambda *_args, **_kwargs: (
+                        order.append("sync") or (common_dir, "a" * 40)
+                    ),
+                ) as prepare,
+                mock.patch.object(
+                    launcher,
+                    "run_command",
+                    side_effect=lambda command, **_kwargs: (
+                        order.append("start") or self.completed()
+                    ),
+                ) as run,
+                mock.patch.object(launcher, "emit"),
+            ):
+                result = launcher.rotate_session(
+                    options,
+                    repository_root,
+                    runners,
+                    common_dir,
+                    state_path.parent,
+                    "tmux",
+                )
+
+            self.assertEqual(0, result)
+            self.assertEqual(
+                ["owned", "parent", "wait", "stop", "owned", "kill", "sync", "start"],
+                order,
+            )
+            self.assertFalse(prepare.call_args.kwargs["validate_loaded_control"])
+            command = run.call_args.args[0]
+            self.assertEqual(str(adapter_path), command[0])
+            self.assertIn("--repository-root", command)
+            self.assertIn("--no-attach", command)
+            self.assertIn("--dispatcher-profile", command)
+            self.assertIn("loop-dispatcher", command)
+            self.assertIn("--reviewer-profile", command)
+            self.assertIn("loop-reviewer", command)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual("completed", state["state"])
+            self.assertEqual("a" * 40, state["target_main"])
 
     def test_tmux_layout_maps_roles_to_four_quadrants(self) -> None:
         pane_ids = iter(("%2", "%3", "%4"))

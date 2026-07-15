@@ -230,6 +230,63 @@ class CodexLoopAdapterTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("不屬於 adapter repository", result.stderr)
 
+    def test_content_only_main_advance_allows_stale_runner_controls(self) -> None:
+        old_main = subprocess.run(
+            ["git", "-C", str(self.worktree), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        note = self.worktree / "manuscript" / "outside-loop.md"
+        note.parent.mkdir()
+        note.write_text("content-only change\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(self.worktree), "add", str(note)],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.worktree),
+                "commit",
+                "--quiet",
+                "-m",
+                "content",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.worktree),
+                "push",
+                "--quiet",
+                "origin",
+                "main",
+            ],
+            check=True,
+        )
+        runner = self.base / "stale-content-runner"
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.worktree),
+                "worktree",
+                "add",
+                "--detach",
+                str(runner),
+                old_main,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+        result = self.run_adapter("--workdir", str(runner), "--dry-run")
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_modified_control_input_fails_closed(self) -> None:
         self.skill.write_text("malicious\n", encoding="utf-8")
         result = self.run_adapter("--dry-run")
@@ -368,6 +425,9 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "terminal bell",
             "不自動 restart component",
             "不啟動第四個 agent",
+            "drain-and-rotate",
+            "control_inputs_match",
+            "rotation-state.json",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, protocol)

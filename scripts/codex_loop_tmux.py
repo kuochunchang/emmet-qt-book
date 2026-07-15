@@ -138,6 +138,8 @@ def build_component_commands(
     profile: str | None = None,
     role_profiles: Mapping[str, str | None] | None = None,
     tmux_bin: str = "tmux",
+    session: str = DEFAULT_SESSION,
+    repository_root: Path = REPOSITORY_ROOT,
 ) -> dict[str, list[str]]:
     commands = {
         "dispatcher": [
@@ -178,6 +180,10 @@ def build_component_commands(
             "--tmux-title",
             "--tmux-bin",
             tmux_bin,
+            "--tmux-session",
+            session,
+            "--repository-root",
+            str(repository_root),
             "--interval-seconds",
             str(interval_seconds),
             "--retry-seconds",
@@ -186,11 +192,19 @@ def build_component_commands(
             str(dispatcher_heartbeat_seconds),
         ],
     }
-    for role, selected_profile in resolve_role_profiles(
-        profile, role_profiles
-    ).items():
+    resolved_profiles = resolve_role_profiles(profile, role_profiles)
+    for role, selected_profile in resolved_profiles.items():
         if selected_profile:
             commands[role].extend(["--profile", selected_profile])
+    shared_profile = common_role_profile(resolved_profiles)
+    if shared_profile:
+        commands["events"].extend(["--rotation-profile", shared_profile])
+    else:
+        for role, selected_profile in resolved_profiles.items():
+            if selected_profile:
+                commands["events"].extend(
+                    [f"--rotation-{role}-profile", selected_profile]
+                )
     return commands
 
 
@@ -372,10 +386,13 @@ def stop_existing_components(
 def prepare_runners(
     repository_root: Path,
     runners: Mapping[str, Path],
+    *,
+    validate_loaded_control: bool = True,
 ) -> tuple[Path, str]:
     root, common_dir = adapter._git_root_and_common_dir(repository_root)
     adapter.refresh_trusted_main(root)
-    adapter._validate_control_inputs(root)
+    if validate_loaded_control:
+        adapter._validate_control_inputs(REPOSITORY_ROOT)
     expected = adapter._git_output(root, "rev-parse", adapter.TRUSTED_REF)
     root_origin = adapter._git_output(root, "remote", "get-url", "origin")
 
@@ -811,6 +828,10 @@ def runner_git_state(workdir: Path) -> dict[str, object]:
         return result
     head_sha = head.stdout.strip()
     trusted_sha = trusted.stdout.strip() if trusted.returncode == 0 else None
+    try:
+        control_changes = adapter.control_input_changes(workdir)
+    except ValueError:
+        control_changes = None
     result.update(
         {
             "git": True,
@@ -820,6 +841,10 @@ def runner_git_state(workdir: Path) -> dict[str, object]:
             "matches_trusted_main": (
                 trusted_sha is not None and head_sha == trusted_sha
             ),
+            "control_inputs_match": (
+                not control_changes if control_changes is not None else None
+            ),
+            "changed_control_paths": control_changes,
         }
     )
     return result
@@ -845,6 +870,12 @@ def status_report(
             profile_source = "session"
         elif not any(profiles.values()):
             profile_source = "not-recorded"
+    try:
+        rotation = json.loads(
+            runtime.rotation_state_path(runtime_dir).read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        rotation = None
     emit(
         component="tmux",
         result="status",
@@ -864,6 +895,7 @@ def status_report(
         codex_profile=common_role_profile(profiles),
         codex_profiles=profiles,
         codex_profile_source=profile_source,
+        rotation=rotation,
     )
 
 
@@ -957,10 +989,165 @@ def cleanup_failed_start(
     return list(dict.fromkeys(errors))
 
 
+def update_rotation_state(
+    path: Path,
+    *,
+    state: str,
+    **fields: object,
+) -> None:
+    existing: dict[str, object] = {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    else:
+        if isinstance(value, dict):
+            existing = value
+    existing.pop("updated_at", None)
+    payload = {**existing, **fields, "state": state}
+    runtime.write_rotation_state(
+        path,
+        **payload,
+    )
+
+
+def verify_rotation_parent(
+    runtime_dir: Path,
+    parent_pid: int,
+) -> None:
+    metadata = active_components(runtime_dir).get("events")
+    if metadata is None:
+        raise LauncherError("rotation parent 的 events lock 不存在")
+    if (
+        component_pid("events", metadata) != parent_pid
+        or not process_matches_component(parent_pid, "events")
+        or not process_holds_lock(parent_pid, runtime_dir / "events.lock")
+    ):
+        raise LauncherError("rotation parent command／lock identity 驗證失敗")
+
+
+def build_rotated_start_command(
+    adapter_path: Path,
+    options: argparse.Namespace,
+    repository_root: Path,
+) -> list[str]:
+    command = [
+        str(adapter_path),
+        "tmux",
+        "start",
+        "--repository-root",
+        str(repository_root),
+        "--session",
+        options.session,
+        "--tmux-bin",
+        options.tmux_bin,
+        "--no-attach",
+        "--stop-timeout-seconds",
+        str(options.stop_timeout_seconds),
+        "--startup-timeout-seconds",
+        str(options.startup_timeout_seconds),
+        "--interval-seconds",
+        str(options.interval_seconds),
+        "--retry-seconds",
+        str(options.retry_seconds),
+        "--dispatcher-heartbeat-seconds",
+        str(options.dispatcher_heartbeat_seconds),
+    ]
+    if options.profile:
+        command.extend(["--profile", options.profile])
+    for role in adapter.ROLES:
+        selected_profile = getattr(options, f"{role}_profile")
+        if selected_profile:
+            command.extend([f"--{role}-profile", selected_profile])
+    return command
+
+
+def rotate_session(
+    options: argparse.Namespace,
+    repository_root: Path,
+    runners: Mapping[str, Path],
+    common_dir: Path,
+    runtime_dir: Path,
+    tmux_bin: str,
+) -> int:
+    """Replace an idle owned session from the newly fetched trusted controls."""
+
+    if options.wait_pid is None or options.rotation_state is None:
+        raise LauncherError("rotate 缺少 parent PID 或 rotation state path")
+    state_path = options.rotation_state.expanduser().resolve()
+    if not session_exists(tmux_bin, options.session):
+        raise LauncherError("待換代的 tmux session 不存在")
+    verify_owned_session(tmux_bin, options.session, common_dir)
+    verify_rotation_parent(runtime_dir, options.wait_pid)
+    update_rotation_state(
+        state_path,
+        state="waiting-for-manager",
+        rotator_pid=os.getpid(),
+    )
+    wait_for_lock_release(
+        runtime_dir / "events.lock",
+        options.stop_timeout_seconds,
+    )
+    update_rotation_state(state_path, state="stopping-components")
+    stop_existing_components(
+        runtime_dir,
+        allow_stop=True,
+        timeout_seconds=options.stop_timeout_seconds,
+    )
+    if session_exists(tmux_bin, options.session):
+        verify_owned_session(tmux_bin, options.session, common_dir)
+        tmux_command(tmux_bin, "kill-session", "-t", options.session)
+    update_rotation_state(state_path, state="syncing-runners")
+    prepared_common_dir, main_sha = prepare_runners(
+        repository_root,
+        runners,
+        validate_loaded_control=False,
+    )
+    if prepared_common_dir != common_dir:
+        raise LauncherError("runner Git common-dir 在換代期間改變")
+    adapter_path = runners["dispatcher"] / "scripts" / "codex-loop"
+    if not adapter_path.is_file() or not os.access(adapter_path, os.X_OK):
+        raise LauncherError(f"換代後 trusted adapter 不可執行：{adapter_path}")
+    update_rotation_state(
+        state_path,
+        state="starting-session",
+        target_main=main_sha,
+    )
+    run_command(
+        build_rotated_start_command(
+            adapter_path,
+            options,
+            repository_root,
+        )
+    )
+    update_rotation_state(
+        state_path,
+        state="completed",
+        target_main=main_sha,
+    )
+    emit(
+        component="tmux",
+        result="rotation-completed",
+        session=options.session,
+        main_sha=main_sha,
+        rotation_state=str(state_path),
+    )
+    return 0
+
+
 def launch(options: argparse.Namespace) -> int:
-    repository_root = REPOSITORY_ROOT.resolve()
+    repository_root = (
+        options.repository_root.expanduser().resolve()
+        if options.repository_root is not None
+        else REPOSITORY_ROOT.resolve()
+    )
     runners = runner_workdirs(repository_root)
     _, common_dir = adapter._git_root_and_common_dir(repository_root)
+    _, loaded_common_dir = adapter._git_root_and_common_dir(
+        REPOSITORY_ROOT.resolve()
+    )
+    if loaded_common_dir != common_dir:
+        raise LauncherError("--repository-root 不屬於目前 trusted adapter repository")
     runtime_dir = adapter.default_lock_dir(common_dir)
     tmux_bin = resolve_executable(options.tmux_bin, "tmux")
     profiles = resolve_role_profiles(
@@ -970,6 +1157,16 @@ def launch(options: argparse.Namespace) -> int:
             for role in adapter.ROLES
         },
     )
+    if options.action == "rotate":
+        validate_profile_files(profiles)
+        return rotate_session(
+            options,
+            repository_root,
+            runners,
+            common_dir,
+            runtime_dir,
+            tmux_bin,
+        )
     adapter_path = runners["dispatcher"] / "scripts" / "codex-loop"
     commands = build_component_commands(
         adapter_path,
@@ -979,6 +1176,8 @@ def launch(options: argparse.Namespace) -> int:
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
         role_profiles=profiles,
         tmux_bin=tmux_bin,
+        session=options.session,
+        repository_root=repository_root,
     )
 
     if options.action == "status":
@@ -1061,6 +1260,8 @@ def launch(options: argparse.Namespace) -> int:
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
         role_profiles=profiles,
         tmux_bin=tmux_bin,
+        session=options.session,
+        repository_root=repository_root,
     )
     run_preflight(adapter_path, runners, role_profiles=profiles)
 
@@ -1155,7 +1356,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "action",
         nargs="?",
-        choices=("start", "restart", "stop", "status"),
+        choices=("start", "restart", "stop", "status", "rotate"),
         default="start",
         help=(
             "start 防止重複啟動；restart 有序停止後更新；"
@@ -1166,6 +1367,9 @@ def parser() -> argparse.ArgumentParser:
         "--session",
         type=validate_session_name,
         default=DEFAULT_SESSION,
+    )
+    result.add_argument(
+        "--repository-root", type=Path, help=argparse.SUPPRESS
     )
     result.add_argument(
         "--profile",
@@ -1194,6 +1398,12 @@ def parser() -> argparse.ArgumentParser:
         help="只列出 lifecycle、runner、pane、command 與 active state。",
     )
     result.add_argument("--tmux-bin", default="tmux")
+    result.add_argument(
+        "--wait-pid", type=int, help=argparse.SUPPRESS
+    )
+    result.add_argument(
+        "--rotation-state", type=Path, help=argparse.SUPPRESS
+    )
     result.add_argument(
         "--stop-timeout-seconds",
         type=positive_number,
@@ -1227,6 +1437,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
     try:
         return launch(options)
     except (LauncherError, ValueError, OSError) as error:
+        if options.action == "rotate" and options.rotation_state is not None:
+            try:
+                update_rotation_state(
+                    options.rotation_state.expanduser().resolve(),
+                    state="failed",
+                    detail=str(error),
+                )
+            except OSError:
+                pass
         print(f"codex-loop tmux: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

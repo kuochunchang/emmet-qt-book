@@ -90,7 +90,9 @@ def refresh_trusted_main(repository_root: Path) -> None:
         raise ValueError(f"無法更新受信任 origin/main：{detail}")
 
 
-def _validate_control_inputs(workdir: Path) -> None:
+def control_input_changes(workdir: Path) -> list[str]:
+    """Return control paths whose content differs from trusted main."""
+
     changed = _git_output(
         workdir,
         "diff",
@@ -108,7 +110,13 @@ def _validate_control_inputs(workdir: Path) -> None:
         "--",
         *CONTROL_PATHS,
     )
-    unsafe = sorted({line for line in (changed + "\n" + untracked).splitlines() if line})
+    return sorted(
+        {line for line in (changed + "\n" + untracked).splitlines() if line}
+    )
+
+
+def _validate_control_inputs(workdir: Path) -> None:
+    unsafe = control_input_changes(workdir)
     if unsafe:
         names = ", ".join(unsafe)
         raise ValueError(f"role control inputs 與 origin/main 不一致：{names}")
