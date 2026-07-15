@@ -254,6 +254,34 @@ mode `0600` Unix stream socket。Event payload 與 ACK 都是單行 JSON；paylo
 `event_id` 與 poll 時間。錯 role、未知 action、過大或無效 JSON 必須拒絕，不能啟動
 Codex。
 
+### 操作員狀態與阻斷判定
+
+每次成功 poll，event manager 另外輸出一筆 `result=operator-status` JSONL；欄位
+`health`、`blocking`、`owner`、`current`、`next` 與 `attention` 分別回答
+目前健康度、是否阻斷、誰負責、現況、下一個安全動作與需介入原因。解說直接取自
+同一次 GitHub snapshot、routing decision 與本機 agent completion metadata；它不做
+第二次 polling、不使用模型，也不啟動第四個 agent。
+
+| `health` | `blocking` | 意義 |
+| --- | --- | --- |
+| `healthy` | `false` | durable state 合法且有明確 owner／下一步 |
+| `running` | `false` | 正好有一個 Codex iteration 執行中 |
+| `paused` | `true` | Meta Issue #1 的 `loop:paused` 正在阻止推進 |
+| `blocked` | `true` | state invariant、同時 busy、delivery 或 GitHub polling 有錯 |
+| `stalled` | `true` | owner iteration 已完成，但 durable workflow state 沒前進 |
+
+Agent 完成 iteration 時只把 event ID、exit code 與完成時間寫入既有 role lock
+metadata。Manager 以 delivery 當下和下一次 poll 的 workflow fingerprint 比較 label、
+Issue／PR 配對與 PR head／base 等 routing-bearing state；一般留言造成的
+`updatedAt` 不算進度。相同 owner／reason 的 iteration 已完成而 fingerprint 不變時，
+輸出 `reason=no-durable-progress-after-iteration`，即使 child exit code 是 `0` 仍
+判為 `health=stalled`。這能揭露 safety denial 或 no-op 被 ACK／retry window 暫時
+遮住的情形。
+
+`operator-status` 是唯讀、非 durable 的操作者診斷；它不改 label、不縮短 retry、
+不授權繞過 approval，也不能取代 GitHub reconciliation。Manager 重啟後，本機 delivery
+歷史可以消失；下一個 role iteration 仍須以 GitHub durable state 恢復。
+
 ### Trusted runners 與啟動
 
 四個可見終端可由 repo-local tmux launcher 統一管理：

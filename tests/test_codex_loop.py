@@ -360,6 +360,9 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "不提供、安裝、enable 或 start 主機 unit",
             "./scripts/codex-loop tmux restart",
             "Model 與 reasoning effort 不由 launcher 硬編碼",
+            "`operator-status`",
+            "no-durable-progress-after-iteration",
+            "不啟動第四個 agent",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, protocol)
@@ -384,6 +387,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "右下角 event manager 才會啟動",
             "同名 session 若不是本 launcher 建立就拒絕處理",
             "不新增／移除 `loop:paused`",
+            "`health`、`blocking`、`owner`",
+            "`health=stalled`",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runbook)
