@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import time
+import tomllib
 from typing import Mapping, Sequence
 
 try:
@@ -31,8 +32,10 @@ except ImportError:  # Direct execution through scripts/codex-loop.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SESSION = "emmet-qt-book-loop"
 SESSION_MARKER = "@emmet_loop_common_dir"
+SESSION_PROFILES = "@emmet_loop_codex_profiles"
 COMPONENTS = ("events", *adapter.ROLES)
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class LauncherError(ValueError):
@@ -58,6 +61,65 @@ def validate_session_name(value: str) -> str:
     return value
 
 
+def validate_profile_name(value: str) -> str:
+    if not PROFILE_PATTERN.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            "profile 名稱只能包含英數字、底線與連字號"
+        )
+    return value
+
+
+def resolve_role_profiles(
+    profile: str | None,
+    role_profiles: Mapping[str, str | None] | None = None,
+) -> dict[str, str | None]:
+    overrides = dict(role_profiles or {})
+    unknown = set(overrides) - set(adapter.ROLES)
+    if unknown:
+        raise LauncherError(
+            "未知的 Codex role profile：" + ", ".join(sorted(unknown))
+        )
+    return {
+        role: profile if overrides.get(role) is None else overrides[role]
+        for role in adapter.ROLES
+    }
+
+
+def common_role_profile(
+    role_profiles: Mapping[str, str | None],
+) -> str | None:
+    values = set(role_profiles.values())
+    if len(values) == 1:
+        return next(iter(values))
+    return None
+
+
+def codex_home() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / ".codex").resolve()
+
+
+def validate_profile_files(
+    role_profiles: Mapping[str, str | None],
+) -> None:
+    names = sorted(
+        {profile for profile in role_profiles.values() if profile is not None}
+    )
+    for profile in names:
+        path = codex_home() / f"{profile}.config.toml"
+        if not path.is_file():
+            raise LauncherError(f"找不到 Codex profile：{profile}（{path}）")
+        try:
+            with path.open("rb") as stream:
+                tomllib.load(stream)
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            raise LauncherError(
+                f"無法解析 Codex profile：{profile}（{path}）：{error}"
+            ) from error
+
+
 def runner_workdirs(repository_root: Path = REPOSITORY_ROOT) -> dict[str, Path]:
     root = repository_root.expanduser().resolve()
     return {
@@ -74,6 +136,7 @@ def build_component_commands(
     retry_seconds: float,
     dispatcher_heartbeat_seconds: float,
     profile: str | None = None,
+    role_profiles: Mapping[str, str | None] | None = None,
     tmux_bin: str = "tmux",
 ) -> dict[str, list[str]]:
     commands = {
@@ -123,9 +186,11 @@ def build_component_commands(
             str(dispatcher_heartbeat_seconds),
         ],
     }
-    if profile:
-        for role in adapter.ROLES:
-            commands[role].extend(["--profile", profile])
+    for role, selected_profile in resolve_role_profiles(
+        profile, role_profiles
+    ).items():
+        if selected_profile:
+            commands[role].extend(["--profile", selected_profile])
     return commands
 
 
@@ -362,7 +427,9 @@ def run_preflight(
     adapter_path: Path,
     runners: Mapping[str, Path],
     profile: str | None = None,
+    role_profiles: Mapping[str, str | None] | None = None,
 ) -> None:
+    profiles = resolve_role_profiles(profile, role_profiles)
     for role in adapter.ROLES:
         command = [
             str(adapter_path),
@@ -371,8 +438,8 @@ def run_preflight(
             "--workdir",
             str(runners[role]),
         ]
-        if profile:
-            command.extend(["--profile", profile])
+        if profiles[role]:
+            command.extend(["--profile", profiles[role]])
         command.append("--dry-run")
         run_command(command)
     run_command(
@@ -422,6 +489,55 @@ def session_marker(tmux_bin: str, session: str) -> str:
         SESSION_MARKER,
         check=False,
     ).stdout.strip()
+
+
+def session_role_profiles(
+    tmux_bin: str,
+    session: str,
+) -> dict[str, str | None] | None:
+    raw = tmux_command(
+        tmux_bin,
+        "show-options",
+        "-qv",
+        "-t",
+        session,
+        SESSION_PROFILES,
+        check=False,
+    ).stdout.strip()
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise LauncherError("tmux session 的 Codex profile metadata 無效") from error
+    if not isinstance(value, dict) or set(value) != set(adapter.ROLES):
+        raise LauncherError("tmux session 的 Codex profile metadata 不完整")
+    result: dict[str, str | None] = {}
+    for role in adapter.ROLES:
+        selected = value[role]
+        if selected is not None and not isinstance(selected, str):
+            raise LauncherError("tmux session 的 Codex profile metadata 類型錯誤")
+        result[role] = selected
+    return result
+
+
+def set_session_role_profiles(
+    tmux_bin: str,
+    session: str,
+    role_profiles: Mapping[str, str | None],
+) -> None:
+    profiles = resolve_role_profiles(None, role_profiles)
+    payload = json.dumps(profiles, ensure_ascii=False, sort_keys=True)
+    tmux_command(
+        tmux_bin,
+        "set-option",
+        "-t",
+        session,
+        SESSION_PROFILES,
+        payload,
+    )
+    if session_role_profiles(tmux_bin, session) != profiles:
+        raise LauncherError("建立 tmux session Codex profile metadata 失敗")
 
 
 def verify_owned_session(
@@ -716,9 +832,19 @@ def status_report(
     runners: Mapping[str, Path],
     runtime_dir: Path,
     profile: str | None,
+    role_profiles: Mapping[str, str | None] | None = None,
 ) -> None:
     exists = session_exists(tmux_bin, session)
     marker = session_marker(tmux_bin, session) if exists else None
+    profiles = resolve_role_profiles(profile, role_profiles)
+    profile_source = "arguments" if any(profiles.values()) else "inherited"
+    if exists and marker == str(common_dir):
+        stored_profiles = session_role_profiles(tmux_bin, session)
+        if stored_profiles is not None:
+            profiles = stored_profiles
+            profile_source = "session"
+        elif not any(profiles.values()):
+            profile_source = "not-recorded"
     emit(
         component="tmux",
         result="status",
@@ -732,8 +858,12 @@ def status_report(
             role: runner_git_state(workdir)
             for role, workdir in runners.items()
         },
-        codex_configuration="inherited",
-        codex_profile=profile,
+        codex_configuration=(
+            "profiles" if any(profiles.values()) else "inherited"
+        ),
+        codex_profile=common_role_profile(profiles),
+        codex_profiles=profiles,
+        codex_profile_source=profile_source,
     )
 
 
@@ -746,9 +876,11 @@ def dry_run_plan(
     runtime_dir: Path,
     commands: Mapping[str, Sequence[str]],
     profile: str | None,
+    role_profiles: Mapping[str, str | None] | None = None,
 ) -> None:
     exists = session_exists(tmux_bin, session)
     marker = session_marker(tmux_bin, session) if exists else None
+    profiles = resolve_role_profiles(profile, role_profiles)
     emit(
         component="tmux",
         result="dry-run",
@@ -768,8 +900,14 @@ def dry_run_plan(
             role: shlex.join(command) for role, command in commands.items()
         },
         active_components=list(active_components(runtime_dir)),
-        codex_configuration="inherited",
-        codex_profile=profile,
+        codex_configuration=(
+            "profiles" if any(profiles.values()) else "inherited"
+        ),
+        codex_profile=common_role_profile(profiles),
+        codex_profiles=profiles,
+        codex_profile_source=(
+            "arguments" if any(profiles.values()) else "inherited"
+        ),
     )
 
 
@@ -825,6 +963,13 @@ def launch(options: argparse.Namespace) -> int:
     _, common_dir = adapter._git_root_and_common_dir(repository_root)
     runtime_dir = adapter.default_lock_dir(common_dir)
     tmux_bin = resolve_executable(options.tmux_bin, "tmux")
+    profiles = resolve_role_profiles(
+        options.profile,
+        {
+            role: getattr(options, f"{role}_profile")
+            for role in adapter.ROLES
+        },
+    )
     adapter_path = runners["dispatcher"] / "scripts" / "codex-loop"
     commands = build_component_commands(
         adapter_path,
@@ -832,7 +977,7 @@ def launch(options: argparse.Namespace) -> int:
         interval_seconds=options.interval_seconds,
         retry_seconds=options.retry_seconds,
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
-        profile=options.profile,
+        role_profiles=profiles,
         tmux_bin=tmux_bin,
     )
 
@@ -844,8 +989,12 @@ def launch(options: argparse.Namespace) -> int:
             runners,
             runtime_dir,
             options.profile,
+            profiles,
         )
         return 0
+
+    if options.action in ("start", "restart"):
+        validate_profile_files(profiles)
 
     if options.dry_run:
         dry_run_plan(
@@ -857,6 +1006,7 @@ def launch(options: argparse.Namespace) -> int:
             runtime_dir,
             commands,
             options.profile,
+            profiles,
         )
         return 0
 
@@ -909,10 +1059,10 @@ def launch(options: argparse.Namespace) -> int:
         interval_seconds=options.interval_seconds,
         retry_seconds=options.retry_seconds,
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
-        profile=options.profile,
+        role_profiles=profiles,
         tmux_bin=tmux_bin,
     )
-    run_preflight(adapter_path, runners, options.profile)
+    run_preflight(adapter_path, runners, role_profiles=profiles)
 
     remove_stale_sockets(runtime_dir)
     try:
@@ -922,6 +1072,7 @@ def launch(options: argparse.Namespace) -> int:
             common_dir,
             runners,
         )
+        set_session_role_profiles(tmux_bin, options.session, profiles)
         for role in adapter.ROLES:
             send_pane_command(tmux_bin, panes[role], commands[role])
         wait_for_agent_sockets(
@@ -968,8 +1119,12 @@ def launch(options: argparse.Namespace) -> int:
         session=options.session,
         main_sha=main_sha,
         panes=panes,
-        codex_configuration="inherited",
-        codex_profile=options.profile,
+        codex_configuration=(
+            "profiles" if any(profiles.values()) else "inherited"
+        ),
+        codex_profile=common_role_profile(profiles),
+        codex_profiles=profiles,
+        codex_profile_source="session",
     )
 
     if options.no_attach:
@@ -1014,11 +1169,20 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--profile",
+        type=validate_profile_name,
         help=(
-            "三個 Codex 角色共同使用的設定 profile；"
-            "預設繼承 Codex 設定。"
+            "三個 Codex 角色共同使用的預設 profile；"
+            "role-specific profile 可覆寫，未指定則繼承 Codex 設定。"
         ),
     )
+    for role in adapter.ROLES:
+        result.add_argument(
+            f"--{role}-profile",
+            type=validate_profile_name,
+            help=(
+                f"{role} 專用的 Codex profile；覆寫共用 --profile。"
+            ),
+        )
     result.add_argument(
         "--no-attach",
         action="store_true",
