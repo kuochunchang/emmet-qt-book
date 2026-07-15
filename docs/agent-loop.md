@@ -256,6 +256,25 @@ Codex。
 
 ### Trusted runners 與啟動
 
+四個可見終端可由 repo-local tmux launcher 統一管理：
+
+```bash
+./scripts/codex-loop tmux status
+./scripts/codex-loop tmux start
+./scripts/codex-loop tmux restart
+./scripts/codex-loop tmux stop
+```
+
+Launcher 只封裝本節既有的 trusted-runner 更新、四項預檢、先 agents 後 manager 的
+啟動順序，以及先 manager 後 agents 的停止順序；不建立第二套 routing／durable
+state，不變更 GitHub label，不安裝 scheduler。它只會取代帶有本 repository
+ownership marker 的同名 tmux session，並以 role lock metadata 驗證要停止的 PID；
+驗證失敗就停止。完整操作、2×2 pane 位置、detach 與中途失敗清理見
+[`agent-loop-operations.md`](agent-loop-operations.md#tmux-一鍵生命週期建議入口)。
+
+Model 與 reasoning effort 不由 launcher 硬編碼；每次 Codex iteration 依正常 Codex
+設定優先序解析，三個 agent 可選擇共同的 `--profile`，event manager 不使用模型。
+
 一次性準備 trusted runner worktree（存在則不重建；它們不拿來 checkout 任務）：
 
 ```bash

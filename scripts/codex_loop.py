@@ -40,6 +40,7 @@ CONTROL_PATHS = (
     "scripts/codex-loop",
     "scripts/codex_loop.py",
     "scripts/codex_loop_runtime.py",
+    "scripts/codex_loop_tmux.py",
 )
 
 

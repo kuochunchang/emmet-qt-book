@@ -332,8 +332,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         mode = ADAPTER.stat().st_mode
         self.assertTrue(mode & stat.S_IXUSR)
 
-    def test_public_wrapper_exposes_agent_and_events_components(self) -> None:
-        for component in ("agent", "events"):
+    def test_public_wrapper_exposes_runtime_and_tmux_components(self) -> None:
+        for component in ("agent", "events", "tmux"):
             with self.subTest(component=component):
                 completed = subprocess.run(
                     [str(ADAPTER), component, "--help"],
@@ -358,6 +358,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "trusted runner",
             "scripts/codex-loop",
             "不提供、安裝、enable 或 start 主機 unit",
+            "./scripts/codex-loop tmux restart",
+            "Model 與 reasoning effort 不由 launcher 硬編碼",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, protocol)
@@ -367,6 +369,24 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         self.assertIn(".claude/skills/", agents)
         self.assertIn(".agents/skills/", agents)
         self.assertIn("不安裝或啟用主機 scheduler", agents)
+
+    def test_tmux_runbook_defines_safe_lifecycle_and_pane_map(self) -> None:
+        runbook = (
+            ROOT / "docs" / "agent-loop-operations.md"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "./scripts/codex-loop tmux start",
+            "./scripts/codex-loop tmux restart",
+            "./scripts/codex-loop tmux stop",
+            "./scripts/codex-loop tmux status",
+            "| 左上 | dispatcher agent |",
+            "| 右下 | event manager |",
+            "右下角 event manager 才會啟動",
+            "同名 session 若不是本 launcher 建立就拒絕處理",
+            "不新增／移除 `loop:paused`",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, runbook)
 
 
 if __name__ == "__main__":
