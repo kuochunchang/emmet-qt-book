@@ -19,6 +19,7 @@ from scripts.codex_loop_runtime import (
     build_operator_alert,
     classify_snapshot,
     command_with_event_context,
+    control_rotation_status,
     describe_operator_status,
     detect_stalled_iteration,
     normalize_snapshot,
@@ -27,11 +28,15 @@ from scripts.codex_loop_runtime import (
     poll_github,
     pull_request_disappeared,
     read_agent_states,
+    rotation_state_path,
+    run_events,
     select_poll_decisions,
     socket_path,
     transition_operator_alert,
     update_pane_title,
+    write_rotation_state,
     workflow_state_fingerprint,
+    parser as runtime_parser,
 )
 
 
@@ -185,6 +190,60 @@ class PaneTitleTests(unittest.TestCase):
                 )
             )
         disabled_run.assert_not_called()
+
+
+class ControlRotationTests(unittest.TestCase):
+    def test_status_drains_busy_role_without_marking_workflow_blocked(self) -> None:
+        state = snapshot(
+            issues=[loop_object("issue", 3, "loop:coding")],
+            pull_requests=[
+                loop_object("pull_request", 62, "loop:needs-review")
+            ],
+        )
+
+        draining = control_rotation_status(
+            state,
+            busy=["coder"],
+            changes=["scripts/codex_loop_runtime.py"],
+        )
+        rotating = control_rotation_status(
+            state,
+            busy=[],
+            changes=["scripts/codex_loop_runtime.py"],
+        )
+
+        self.assertEqual("draining", draining["health"])
+        self.assertFalse(draining["blocking"])
+        self.assertEqual([], rotating["busy_roles"])
+        self.assertEqual("rotating", rotating["health"])
+        self.assertIn(
+            "scripts/codex_loop_runtime.py",
+            str(rotating["attention"]),
+        )
+        self.assertEqual(
+            "換代：等待目前 iteration 結束",
+            operator_pane_status(draining),
+        )
+        self.assertEqual(
+            "換代：同步 trusted runners",
+            operator_pane_status(rotating),
+        )
+
+    def test_rotation_state_is_atomic_private_and_in_runtime_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_dir = Path(temporary)
+            path = rotation_state_path(runtime_dir)
+            write_rotation_state(
+                path,
+                state="handoff",
+                target_main="a" * 40,
+            )
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual("handoff", payload["state"])
+            self.assertEqual("a" * 40, payload["target_main"])
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual([], list(runtime_dir.glob("*.tmp")))
 
 
 class EventRoutingTests(unittest.TestCase):
@@ -1008,6 +1067,116 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('"next":', manager.stdout)
         self.assertEqual(0, agent.returncode, agent_stderr)
         self.assertIn("fake-visible-event", agent_stdout)
+
+    def test_event_manager_hands_off_idle_control_drift_without_delivery(
+        self,
+    ) -> None:
+        options = runtime_parser().parse_args(
+            [
+                "events",
+                "--workdir",
+                str(self.worktree),
+                "--gh-bin",
+                str(self.fake_gh),
+                "--repo",
+                "test/repo",
+                "--runtime-dir",
+                str(self.runtime_dir),
+                "--once",
+            ]
+        )
+        current = snapshot()
+        changes = ["scripts/codex_loop_runtime.py"]
+        with (
+            patch(
+                "scripts.codex_loop_runtime._validate_manager_workdir",
+                return_value=(self.worktree, self.worktree / ".git"),
+            ),
+            patch(
+                "scripts.codex_loop_runtime.resolve_executable",
+                return_value=str(self.fake_gh),
+            ),
+            patch(
+                "scripts.codex_loop_runtime.resolve_repo",
+                return_value="test/repo",
+            ),
+            patch(
+                "scripts.codex_loop_runtime.poll_github",
+                return_value=current,
+            ),
+            patch(
+                "scripts.codex_loop_runtime.adapter.refresh_trusted_main"
+            ),
+            patch(
+                "scripts.codex_loop_runtime.adapter.control_input_changes",
+                return_value=changes,
+            ),
+            patch(
+                "scripts.codex_loop_runtime.start_control_rotation",
+                return_value=4321,
+            ) as rotate,
+            patch("scripts.codex_loop_runtime.notify_agent") as notify,
+        ):
+            self.assertEqual(0, run_events(options))
+
+        rotate.assert_called_once()
+        notify.assert_not_called()
+
+    def test_event_manager_drains_busy_control_drift_without_rotation(
+        self,
+    ) -> None:
+        options = runtime_parser().parse_args(
+            [
+                "events",
+                "--workdir",
+                str(self.worktree),
+                "--gh-bin",
+                str(self.fake_gh),
+                "--repo",
+                "test/repo",
+                "--runtime-dir",
+                str(self.runtime_dir),
+                "--once",
+            ]
+        )
+        current = snapshot()
+        with (
+            patch(
+                "scripts.codex_loop_runtime._validate_manager_workdir",
+                return_value=(self.worktree, self.worktree / ".git"),
+            ),
+            patch(
+                "scripts.codex_loop_runtime.resolve_executable",
+                return_value=str(self.fake_gh),
+            ),
+            patch(
+                "scripts.codex_loop_runtime.resolve_repo",
+                return_value="test/repo",
+            ),
+            patch(
+                "scripts.codex_loop_runtime.poll_github",
+                return_value=current,
+            ),
+            patch(
+                "scripts.codex_loop_runtime.busy_roles",
+                return_value=["coder"],
+            ),
+            patch(
+                "scripts.codex_loop_runtime.adapter.refresh_trusted_main"
+            ),
+            patch(
+                "scripts.codex_loop_runtime.adapter.control_input_changes",
+                return_value=["scripts/codex_loop_runtime.py"],
+            ),
+            patch(
+                "scripts.codex_loop_runtime.start_control_rotation"
+            ) as rotate,
+            patch("scripts.codex_loop_runtime.notify_agent") as notify,
+        ):
+            self.assertEqual(0, run_events(options))
+
+        rotate.assert_not_called()
+        notify.assert_not_called()
 
     def test_event_manager_reports_and_escalates_no_progress_once(self) -> None:
         agent = self.start_agent(max_events=2)

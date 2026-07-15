@@ -166,8 +166,15 @@ durable state，不得各自建立狀態機。要點：
   `codex exec --json`。只有獨立的 `scripts/codex-loop events` component 得定期
   polling GitHub 並依協定通知角色；role skill 與 Codex child 不 sleep、不 polling、
   不遞迴啟動。Repo 不安裝或啟用主機 scheduler。
-- Role skill 與治理指令只能從符合最新 `origin/main` 的 trusted runner 載入；候選
-  branch／PR 必須在另一 task／candidate worktree 處理，不得成為下一輪控制來源。
+- Role skill 與治理指令只能從 control inputs 與最新 `origin/main` 完全一致的
+  trusted runner 載入；只有非 control paths 前進時，長駐 runner 的 detached HEAD
+  可暫時落後，下一個 role iteration 仍須 fetch 並以最新 main 建立 task／candidate。
+  候選 branch／PR 必須在另一 task／candidate worktree 處理，不得成為下一輪控制來源。
+- Event manager 發現 `origin/main` 的 control inputs 改變時，必須停止派送新事件；
+  有 child 時先 drain，idle 後只由 launcher-owned detached rotator 驗證 events
+  PID／lock、session ownership、乾淨 runners 與 same-repo，再同步三個 runners、
+  執行四項 preflight 並重建 session。換代失敗時 fail closed；不得由 role、候選
+  branch 或一般 no-progress alert 觸發 restart。
 - Gate 升級不在授權範圍：dispatcher 只彙整退出證據並通知使用者，transition
   仍依下節「Gate 升級」由使用者核准後執行。
 - 使用者可隨時在 Meta Issue #1 加 `loop:paused` label 暫停全部 agent。

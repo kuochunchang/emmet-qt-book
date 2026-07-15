@@ -62,7 +62,7 @@ Checkpoint 期間：
    transition PR merge SHA 與下一步，再依 repository 規則完成 transition Issue。
 7. 從最新 `origin/main` 核對 `AGENTS.md`、curriculum 與 Meta Issue #1 三者完全
    一致；在此之前不得宣稱新 gate 生效或派下一 gate。
-8. 依「治理更新後同步 runners」移動 trusted runners、重跑四項 dry-run。
+8. 依「Control 更新的自動換代與人工 fallback」移動 runners、重跑四項 dry-run。
 9. 若使用了 `loop:paused`，由使用者移除。先保持 `events` 停止，手動執行一次
    dispatcher；確認它留下有效派工與唯一 `loop:queued` 後，才啟動完整四 component
    並人工觀察第一圈 dispatcher → coder → reviewer → dispatcher。
@@ -149,6 +149,8 @@ event manager 每次 poll 輸出的完整 `operator-status`。其中先讀
 | --- | --- |
 | `health=healthy` | state 合法；依 `owner`／`next` 等待下一個 transaction |
 | `health=running` | 一個 role 正在執行；先等待，不手動啟動第二輪 |
+| `health=draining` | control inputs 已更新；manager 停止派送並等待目前 child 結束 |
+| `health=rotating` | detached rotator 正在驗證、同步 runners、preflight 與重建 session |
 | `health=paused` | 使用者的 durable brake 生效；確認安全後仍只由使用者移除 |
 | `health=blocked` | 讀 `reason`／`attention`，修復 state、component 或 GitHub 讀取 |
 | `health=stalled` | iteration 結束但 workflow fingerprint 未變，推進已實質停住 |
@@ -168,9 +170,13 @@ Email 或 Discord 通知；Meta Issue #1 才是需要跨終端保留的人類介
 
 component／socket 錯誤會是 `health=blocked`、`reason=delivery-failed` 與 critical
 alert；依 `affected_role` 修復或重啟該 component，manager 下次 poll 會重送。
-`github-poll-failed` 則先修復 `gh` authentication／network。Event manager 不會
-自動 restart process、不自行移除 `loop:paused`。單看反覆出現的 routing decision
-不代表已送達或有進度。
+`github-poll-failed` 則先修復 `gh` authentication／network。一般 delivery、child
+exit 或 no-progress alert 不會自動 restart process。唯一例外是 unpaused 狀態下
+control inputs 與最新 `origin/main` 不同：manager 先 drain，再交給 detached rotator
+執行 ownership／PID／lock／same-repo 驗證、同步、preflight 與 session 重建。
+`loop:paused` 不會被自動移除，paused 期間也不換代。單看反覆出現的 routing decision
+不代表已送達或有進度；換代細節看 `tmux status` 的 `rotation` 與 runtime directory
+內的 `rotation.log`。
 
 啟動成功會 attach session；在 tmux 按 `Ctrl-b d` 只會 detach，四個 component
 繼續運作。重新觀看：
@@ -364,7 +370,15 @@ Log 可能包含 private repository 路徑、Issue／PR 內容或命令輸出；
 使用前先停止對應 agent，否則同一把 role lock 會回傳 75。不要用 cron、systemd
 timer 或 App Scheduled Tasks 重複呼叫這個相容入口；連續運作只用 `agent` + `events`。
 
-## 治理更新後同步 runners
+## Control 更新的自動換代與人工 fallback
+
+一般圈外內容合併只讓 runner HEAD 暫時落後，不會觸發 restart；`tmux status` 的
+`control_inputs_match=true` 表示 long-lived generation 仍安全。Control inputs
+改變時，正常路徑會自動顯示 `draining`／`rotating`，完成後從 GitHub durable
+state 恢復，不需人工先改 label 或重送事件。
+
+下列手動程序只用於 gate transition 的人工 checkpoint，或 `rotation.state=failed`
+且已依 `detail` 排除原因後：
 
 每次 gate transition，或 `AGENTS.md`、`.agents/`、`.claude/`、`.codex/`、loop
 協定、curriculum、authoring guide、adapter 等 control inputs 在 `main` 改變後：
