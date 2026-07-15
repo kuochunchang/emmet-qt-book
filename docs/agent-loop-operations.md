@@ -87,6 +87,86 @@ Checkpoint 期間：
 Repo 不安裝 cron、systemd unit 或其他主機 scheduler；此模型本身不需要定時器，
 polling 由 `events` process 內建。
 
+## tmux 一鍵生命週期（建議入口）
+
+從主要 checkout 的空終端執行：
+
+```bash
+cd /home/guojun/workspace/emmet-qt-book
+
+./scripts/codex-loop tmux status
+./scripts/codex-loop tmux start
+```
+
+`start` 只用於確認目前沒有 loop component 或同名 session 的首次啟動；任一 lock
+或 session 已存在就 fail closed，不會偷偷啟動第二份。要把既有的手動四終端部署
+換成 tmux，或在 control input 合併後更新並重開，使用：
+
+```bash
+./scripts/codex-loop tmux restart
+```
+
+`restart` 會先停止 event manager，再停止 dispatcher、coder、reviewer，等待各自
+釋放 lock；接著清除本 launcher 擁有的舊 session、fetch `origin/main`、建立缺少
+的 dedicated runner、拒絕不乾淨 runner，並把三個 runner 切到同一個
+`origin/main`。四項預檢通過後才清掉 stale socket 並開 tmux；三個 agent socket
+都 ready 之後，右下角 event manager 才會啟動。
+
+預設 session 名稱是 `emmet-qt-book-loop`，版面固定為：
+
+| 位置 | component |
+| --- | --- |
+| 左上 | dispatcher agent |
+| 右上 | coder agent |
+| 左下 | reviewer agent |
+| 右下 | event manager |
+
+啟動成功會 attach session；在 tmux 按 `Ctrl-b d` 只會 detach，四個 component
+繼續運作。重新觀看：
+
+```bash
+tmux attach-session -t emmet-qt-book-loop
+```
+
+在既有 tmux client 內執行會改用 `switch-client`；若只想背景啟動，加
+`--no-attach`。啟動前只看計畫、不 fetch、不停止 process：
+
+```bash
+./scripts/codex-loop tmux restart --dry-run
+```
+
+其他生命週期命令：
+
+```bash
+# 純讀取：session ownership、active locks、runner HEAD／乾淨狀態
+./scripts/codex-loop tmux status
+
+# 可重複執行：有序停止並只清除本 launcher 擁有的 session
+./scripts/codex-loop tmux stop
+```
+
+`stop` 與 `restart` 都先核對 lock metadata、PID command identity 與 tmux
+ownership marker；同名 session 若不是本 launcher 建立就拒絕處理，也不使用模糊的
+`pkill` 或無條件 `kill -9`。正常停止會讓 busy agent 把 SIGTERM 轉給其 Codex
+child process group。啟動中途失敗時，launcher 會有序停止已起來的 component、
+移除 owned session 與 stale socket；無法驗證 identity 或 lock 未在 timeout 內
+釋放時則保留現場並 fail closed。Pane 非預期退出後會保留畫面供檢查，下一次
+`restart` 才清掉舊 session。
+
+這四個命令只管理本機 process／tmux，不新增 durable workflow state、不安裝或啟用
+主機 scheduler，也不新增／移除 `loop:paused`。若其他 client 仍可能 mutation，
+先由使用者在 Meta Issue #1 加 `loop:paused`，完成重啟與 reconciliation 後再由
+使用者移除。
+
+三個 agent 每次收到事件才建立新的 `codex exec --ephemeral --json`。Launcher
+預設不指定 model 或 reasoning effort，而是在每次 iteration 依 Codex 的正常設定
+優先序讀取 CLI／project／profile／user config；因此三個角色會共同繼承當時設定。
+需要選既有 profile 時用 `--profile NAME`，launcher 會在啟動前對三個角色逐一
+dry-run 該 profile。右下角 `events` 不啟動 Codex，也不使用模型。
+
+以下 dedicated runner、預檢與四終端步驟保留為底層手動操作與故障診斷；一般啟停
+優先使用上述 tmux 入口。
+
 ## 建立 dedicated trusted runners
 
 以下範例假設主要 checkout 位於
