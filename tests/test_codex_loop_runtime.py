@@ -15,12 +15,16 @@ from unittest.mock import patch
 from scripts.codex_loop_runtime import (
     build_event,
     classify_snapshot,
+    describe_operator_status,
+    detect_stalled_iteration,
     normalize_snapshot,
     notify_agent,
     poll_github,
     pull_request_disappeared,
+    read_agent_states,
     select_poll_decisions,
     socket_path,
+    workflow_state_fingerprint,
 )
 
 
@@ -241,6 +245,221 @@ class EventRoutingTests(unittest.TestCase):
         self.assertFalse(pull_request_disappeared(current, current))
 
 
+class OperatorStatusTests(unittest.TestCase):
+    def test_queued_issue_explains_owner_and_next_transition(self) -> None:
+        state = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("healthy", status["health"])
+        self.assertFalse(status["blocking"])
+        self.assertEqual("coder", status["owner"])
+        self.assertEqual("coding-work-available", status["reason"])
+        self.assertIn("Issue #3", status["current"])
+        self.assertIn("loop:coding", status["next"])
+
+    def test_protocol_violation_is_reported_as_blocking(self) -> None:
+        state = snapshot(
+            issues=[
+                loop_object(
+                    "issue",
+                    3,
+                    "loop:coding",
+                    "loop:blocked",
+                )
+            ]
+        )
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("blocked", status["health"])
+        self.assertTrue(status["blocking"])
+        self.assertEqual("dispatcher", status["owner"])
+        self.assertIn("reconciliation", status["next"])
+        self.assertIsNotNone(status["attention"])
+
+    def test_busy_role_is_running_not_stalled(self) -> None:
+        state = snapshot(
+            issues=[loop_object("issue", 3, "loop:coding")]
+        )
+        status = describe_operator_status(
+            state,
+            decisions=[],
+            busy=["coder"],
+        )
+
+        self.assertEqual("running", status["health"])
+        self.assertFalse(status["blocking"])
+        self.assertEqual("coder", status["owner"])
+        self.assertIn("Codex iteration", status["current"])
+        self.assertIn("重新讀取 GitHub", status["next"])
+
+    def test_completed_iteration_without_state_change_is_stalled(self) -> None:
+        state = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        decision = classify_snapshot(state)[0]
+        deliveries = {
+            "coder": {
+                "event_id": "event-1",
+                "reason": decision["reason"],
+                "state_fingerprint": workflow_state_fingerprint(state),
+            }
+        }
+        agent_states = {
+            "coder": {
+                "state": "waiting",
+                "last_event_id": "event-1",
+                "last_exit_code": 0,
+                "last_finished_at": "2026-07-15T05:05:02Z",
+            }
+        }
+
+        stalled = detect_stalled_iteration(
+            state,
+            deliveries=deliveries,
+            agent_states=agent_states,
+        )
+        self.assertIsNotNone(stalled)
+        status = describe_operator_status(
+            state,
+            decisions=[decision],
+            busy=[],
+            stalled=stalled,
+        )
+
+        self.assertEqual("stalled", status["health"])
+        self.assertTrue(status["blocking"])
+        self.assertEqual("dispatcher", status["owner"])
+        self.assertEqual(
+            "no-durable-progress-after-iteration",
+            status["reason"],
+        )
+        self.assertIn("coder", status["attention"])
+
+    def test_timestamp_only_update_does_not_hide_stalled_iteration(self) -> None:
+        before = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        after_item = loop_object("issue", 3, "loop:queued")
+        after_item["updated_at"] = "2026-07-15T05:05:02Z"
+        after = snapshot(issues=[after_item])
+        decision = classify_snapshot(before)[0]
+
+        stalled = detect_stalled_iteration(
+            after,
+            deliveries={
+                "coder": {
+                    "event_id": "event-1",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(before),
+                }
+            },
+            agent_states={
+                "coder": {
+                    "state": "waiting",
+                    "last_event_id": "event-1",
+                    "last_exit_code": 0,
+                }
+            },
+        )
+
+        self.assertIsNotNone(stalled)
+
+    def test_workflow_transition_clears_stalled_detection(self) -> None:
+        before = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        after = snapshot(
+            issues=[loop_object("issue", 3, "loop:coding")]
+        )
+        decision = classify_snapshot(before)[0]
+
+        stalled = detect_stalled_iteration(
+            after,
+            deliveries={
+                "coder": {
+                    "event_id": "event-1",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(before),
+                }
+            },
+            agent_states={
+                "coder": {
+                    "state": "waiting",
+                    "last_event_id": "event-1",
+                    "last_exit_code": 0,
+                }
+            },
+        )
+
+        self.assertIsNone(stalled)
+
+    def test_empty_dispatcher_no_op_is_not_reported_as_stalled(self) -> None:
+        state = snapshot()
+        decision = classify_snapshot(state)[0]
+
+        stalled = detect_stalled_iteration(
+            state,
+            deliveries={
+                "dispatcher": {
+                    "event_id": "event-1",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(state),
+                }
+            },
+            agent_states={
+                "dispatcher": {
+                    "state": "waiting",
+                    "last_event_id": "event-1",
+                    "last_exit_code": 0,
+                }
+            },
+        )
+
+        self.assertIsNone(stalled)
+
+    def test_mergeability_only_update_does_not_hide_stall(self) -> None:
+        issue = loop_object("issue", 3, "loop:coding")
+        before_pr = loop_object(
+            "pull_request", 52, "loop:needs-review"
+        )
+        before_pr["mergeable"] = "UNKNOWN"
+        after_pr = dict(before_pr)
+        after_pr["mergeable"] = "MERGEABLE"
+        before = snapshot(issues=[issue], pull_requests=[before_pr])
+        after = snapshot(issues=[issue], pull_requests=[after_pr])
+        decision = classify_snapshot(before)[0]
+
+        stalled = detect_stalled_iteration(
+            after,
+            deliveries={
+                "reviewer": {
+                    "event_id": "event-1",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(before),
+                }
+            },
+            agent_states={
+                "reviewer": {
+                    "state": "waiting",
+                    "last_event_id": "event-1",
+                    "last_exit_code": 0,
+                }
+            },
+        )
+
+        self.assertIsNotNone(stalled)
+
+
 class AgentRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -437,6 +656,10 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(0, process.returncode, stderr)
         self.assertIn("fake-visible-event", stdout)
         self.assertIn('"result": "iteration-finished"', stdout)
+        metadata = read_agent_states(self.runtime_dir)["dispatcher"]
+        self.assertEqual(event["event_id"], metadata["last_event_id"])
+        self.assertEqual(0, metadata["last_exit_code"])
+        self.assertEqual("waiting", metadata["state"])
         arguments = json.loads(self.capture.read_text(encoding="utf-8"))
         self.assertEqual(1, arguments.count("exec"))
         self.assertIn("--json", arguments)
@@ -495,8 +718,114 @@ class AgentRuntimeTests(unittest.TestCase):
 
         self.assertEqual(0, manager.returncode, manager.stderr)
         self.assertIn('"result": "notified"', manager.stdout)
+        self.assertIn('"result": "operator-status"', manager.stdout)
+        self.assertIn('"health": "healthy"', manager.stdout)
+        self.assertIn('"next":', manager.stdout)
         self.assertEqual(0, agent.returncode, agent_stderr)
         self.assertIn("fake-visible-event", agent_stdout)
+
+    def test_event_manager_reports_no_progress_after_iteration(self) -> None:
+        agent = self.start_agent()
+        payload = {
+            "data": {
+                "repository": {"meta": {"labels": {"nodes": []}}},
+                "loopObjects": {
+                    "nodes": [
+                        {
+                            "__typename": "Issue",
+                            "number": 3,
+                            "updatedAt": "2026-07-15T00:00:00Z",
+                            "labels": {
+                                "nodes": [{"name": "loop:coding"}]
+                            },
+                        },
+                        {
+                            "__typename": "PullRequest",
+                            "number": 52,
+                            "updatedAt": "2026-07-15T00:00:00Z",
+                            "headRefOid": "a" * 40,
+                            "baseRefName": "main",
+                            "isDraft": False,
+                            "mergeable": "MERGEABLE",
+                            "labels": {
+                                "nodes": [{"name": "loop:approved"}]
+                            },
+                        },
+                    ]
+                },
+            }
+        }
+        environment = os.environ.copy()
+        environment["FAKE_GH_PAYLOAD"] = json.dumps(payload)
+        manager = subprocess.Popen(
+            [
+                "python3",
+                str(self.worktree / "scripts" / "codex_loop_runtime.py"),
+                "events",
+                "--workdir",
+                str(self.worktree),
+                "--gh-bin",
+                str(self.fake_gh),
+                "--repo",
+                "test/repo",
+                "--runtime-dir",
+                str(self.runtime_dir),
+                "--interval-seconds",
+                "0.05",
+                "--retry-seconds",
+                "30",
+                "--dispatcher-heartbeat-seconds",
+                "30",
+            ],
+            cwd=self.worktree,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        records: list[dict[str, object]] = []
+        try:
+            self.assertIsNotNone(manager.stdout)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                line = manager.stdout.readline()
+                if not line:
+                    if manager.poll() is not None:
+                        break
+                    continue
+                record = json.loads(line)
+                records.append(record)
+                if (
+                    record.get("result") == "operator-status"
+                    and record.get("health") == "stalled"
+                ):
+                    break
+        finally:
+            manager.terminate()
+            manager_stdout, manager_stderr = manager.communicate(timeout=10)
+            if manager_stdout:
+                records.extend(
+                    json.loads(line)
+                    for line in manager_stdout.splitlines()
+                    if line
+                )
+        agent_stdout, agent_stderr = agent.communicate(timeout=10)
+
+        stalled = [
+            record
+            for record in records
+            if record.get("result") == "operator-status"
+            and record.get("health") == "stalled"
+        ]
+        self.assertTrue(stalled, manager_stderr)
+        self.assertEqual(
+            "no-durable-progress-after-iteration",
+            stalled[-1]["reason"],
+        )
+        self.assertTrue(stalled[-1]["blocking"])
+        self.assertEqual("dispatcher", stalled[-1]["owner"])
+        self.assertEqual(0, agent.returncode, agent_stderr)
+        self.assertIn('"result": "iteration-finished"', agent_stdout)
 
     def test_busy_agent_rejects_new_delivery_without_socket_backlog(self) -> None:
         process = self.start_agent(max_events=0, sleep_seconds="2")

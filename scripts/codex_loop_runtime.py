@@ -124,19 +124,30 @@ def _send_message(connection: socket.socket, value: Mapping[str, object]) -> Non
 
 
 def _write_agent_state(
-    lock_descriptor: int, role: str, state: str
+    lock_descriptor: int,
+    role: str,
+    state: str,
+    *,
+    last_event_id: str | None = None,
+    last_exit_code: int | None = None,
 ) -> None:
-    metadata = (
-        json.dumps(
+    value: dict[str, object] = {
+        "pid": os.getpid(),
+        "role": role,
+        "component": "agent",
+        "state": state,
+    }
+    if last_event_id is not None:
+        value.update(
             {
-                "pid": os.getpid(),
-                "role": role,
-                "component": "agent",
-                "state": state,
+                "last_event_id": last_event_id,
+                "last_exit_code": last_exit_code,
+                "last_finished_at": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                ),
             }
         )
-        + "\n"
-    ).encode("utf-8")
+    metadata = (json.dumps(value) + "\n").encode("utf-8")
     os.ftruncate(lock_descriptor, 0)
     os.pwrite(lock_descriptor, metadata, 0)
 
@@ -267,8 +278,15 @@ def run_agent(options: argparse.Namespace) -> int:
                         except ValueError as error:
                             print(f"codex-loop: {error}", file=sys.stderr)
                             exit_code = 2
+                        event_id = event.get("event_id")
                         _write_agent_state(
-                            lock_descriptor, options.role, "waiting"
+                            lock_descriptor,
+                            options.role,
+                            "waiting",
+                            last_event_id=(
+                                event_id if isinstance(event_id, str) else None
+                            ),
+                            last_exit_code=exit_code,
                         )
                         emit(
                             component="agent",
@@ -476,6 +494,348 @@ def classify_snapshot(snapshot: Mapping[str, object]) -> list[dict[str, object]]
     ]
 
 
+def workflow_state_fingerprint(snapshot: Mapping[str, object]) -> str:
+    """Hash only workflow-bearing state, excluding comment-driven timestamps."""
+
+    def stable_items(name: str) -> list[dict[str, object]]:
+        result: list[dict[str, object]] = []
+        raw_items = snapshot.get(name, [])
+        if not isinstance(raw_items, Sequence):
+            return result
+        for raw_item in raw_items:
+            if not isinstance(raw_item, Mapping):
+                continue
+            item: dict[str, object] = {
+                "kind": raw_item.get("kind"),
+                "number": raw_item.get("number"),
+                "labels": sorted(
+                    str(label) for label in raw_item.get("labels", [])
+                ),
+            }
+            for key in (
+                "head_sha",
+                "base",
+                "draft",
+            ):
+                if key in raw_item:
+                    item[key] = raw_item.get(key)
+            result.append(item)
+        return sorted(
+            result,
+            key=lambda item: (
+                str(item.get("kind")),
+                int(item.get("number") or 0),
+            ),
+        )
+
+    canonical = {
+        "paused": snapshot.get("paused") is True,
+        "issues": stable_items("issues"),
+        "pull_requests": stable_items("pull_requests"),
+    }
+    payload = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _operator_objects(
+    snapshot: Mapping[str, object],
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for name in ("issues", "pull_requests"):
+        raw_items = snapshot.get(name, [])
+        if not isinstance(raw_items, Sequence):
+            continue
+        for raw_item in raw_items:
+            if not isinstance(raw_item, Mapping):
+                continue
+            labels = sorted(
+                str(label) for label in raw_item.get("labels", [])
+            )
+            primary = [label for label in labels if label in PRIMARY_LABELS]
+            result.append(
+                {
+                    "kind": str(raw_item.get("kind")),
+                    "number": raw_item.get("number"),
+                    "state": primary[0] if len(primary) == 1 else None,
+                    "labels": labels,
+                }
+            )
+    return result
+
+
+def _operator_scope(objects: Sequence[Mapping[str, object]]) -> str:
+    if not objects:
+        return "目前沒有 active loop work item"
+    parts: list[str] = []
+    for item in objects:
+        prefix = "PR" if item.get("kind") == "pull_request" else "Issue"
+        state = item.get("state")
+        suffix = f"（{state}）" if isinstance(state, str) else ""
+        parts.append(f"{prefix} #{item.get('number')}{suffix}")
+    return "、".join(parts)
+
+
+def detect_stalled_iteration(
+    snapshot: Mapping[str, object],
+    *,
+    deliveries: Mapping[str, Mapping[str, object]],
+    agent_states: Mapping[str, Mapping[str, object]],
+) -> dict[str, object] | None:
+    """Detect an accepted owner iteration that ended without workflow progress."""
+
+    if snapshot.get("paused") is True:
+        return None
+    current = classify_snapshot(snapshot)
+    if len(current) != 1 or current[0].get("action") != "wake":
+        return None
+    decision = current[0]
+    if decision.get("reason") == "reconcile-or-dispatch":
+        return None
+    role = decision.get("role")
+    if not isinstance(role, str):
+        return None
+    delivery = deliveries.get(role)
+    agent_state = agent_states.get(role)
+    if not isinstance(delivery, Mapping) or not isinstance(
+        agent_state, Mapping
+    ):
+        return None
+    event_id = delivery.get("event_id")
+    if (
+        not isinstance(event_id, str)
+        or delivery.get("reason") != decision.get("reason")
+        or delivery.get("state_fingerprint")
+        != workflow_state_fingerprint(snapshot)
+        or agent_state.get("state") != "waiting"
+        or agent_state.get("last_event_id") != event_id
+    ):
+        return None
+    exit_code = agent_state.get("last_exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        return None
+    return {
+        "role": role,
+        "event_id": event_id,
+        "exit_code": exit_code,
+        "finished_at": agent_state.get("last_finished_at"),
+    }
+
+
+def describe_operator_status(
+    snapshot: Mapping[str, object],
+    *,
+    decisions: Sequence[Mapping[str, object]],
+    busy: Sequence[str],
+    stalled: Mapping[str, object] | None = None,
+    delivery_failures: Sequence[Mapping[str, object]] = (),
+) -> dict[str, object]:
+    """Explain current ownership, blockers, and the next safe action."""
+
+    objects = _operator_objects(snapshot)
+    scope = _operator_scope(objects)
+    busy_roles = [str(role) for role in busy]
+
+    def status(
+        *,
+        health: str,
+        blocking: bool,
+        owner: str | None,
+        reason: str,
+        current: str,
+        next_step: str,
+        attention: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "health": health,
+            "blocking": blocking,
+            "owner": owner,
+            "reason": reason,
+            "current": current,
+            "next": next_step,
+            "attention": attention,
+            "busy_roles": busy_roles,
+            "objects": objects,
+        }
+
+    if snapshot.get("paused") is True:
+        return status(
+            health="paused",
+            blocking=True,
+            owner="operator",
+            reason="global-pause",
+            current="Meta Issue #1 帶有 loop:paused；三個角色都不會啟動 Codex。",
+            next_step=(
+                "操作者先核對 durable state，再明確移除 loop:paused；"
+                "移除前不應手動喚醒角色。"
+            ),
+            attention="全域 pause 正在阻止 loop 推進。",
+        )
+
+    if len(busy_roles) > 1:
+        return status(
+            health="blocked",
+            blocking=True,
+            owner="dispatcher",
+            reason="concurrent-iterations",
+            current=f"{'、'.join(busy_roles)} 同時執行 Codex iteration；{scope}。",
+            next_step=(
+                "dispatcher 應先停止新的 mutation，執行 canonical reconciliation，"
+                "確認只剩一個 owner。"
+            ),
+            attention="同時 busy role 違反 serialized mutation invariant。",
+        )
+
+    if delivery_failures:
+        failure = delivery_failures[0]
+        role = str(failure.get("role") or "unknown")
+        return status(
+            health="blocked",
+            blocking=True,
+            owner="operator",
+            reason="delivery-failed",
+            current=f"event manager 無法把目前事件送給 {role}；{scope}。",
+            next_step=(
+                "檢查該 role 的 process、lock 與 socket；修復 component 後由"
+                " event manager 依同一 GitHub state 重送。"
+            ),
+            attention=str(failure.get("detail") or "event delivery failed"),
+        )
+
+    if stalled is not None:
+        role = str(stalled.get("role") or "unknown")
+        event_id = stalled.get("event_id")
+        exit_code = stalled.get("exit_code")
+        return status(
+            health="stalled",
+            blocking=True,
+            owner="dispatcher",
+            reason="no-durable-progress-after-iteration",
+            current=(
+                f"{role} iteration 已結束，但 {scope} 的 durable workflow state"
+                " 沒有前進。"
+            ),
+            next_step=(
+                "dispatcher 應檢查該角色最後輸出與被拒的 mutation；若是 approval"
+                " 或安全政策阻擋，交由操作者明確處理後再重送，不得繞過。"
+            ),
+            attention=(
+                f"{role} event {event_id} 已完成（exit={exit_code}），"
+                "但 workflow fingerprint 未改變。"
+            ),
+        )
+
+    if busy_roles:
+        role = busy_roles[0]
+        return status(
+            health="running",
+            blocking=False,
+            owner=role,
+            reason="iteration-running",
+            current=f"{role} 正在執行 Codex iteration；{scope}。",
+            next_step=(
+                "等待目前 iteration 結束；event manager 下一次 poll 會重新讀取"
+                " GitHub durable state，並檢查是否確實前進。"
+            ),
+        )
+
+    effective = list(decisions) or classify_snapshot(snapshot)
+    decision = effective[0] if effective else {}
+    role = str(decision.get("role") or "dispatcher")
+    reason = str(decision.get("reason") or "unknown-state")
+    blocking_reasons = {
+        "reconciliation-required",
+        "wip-invariant-violation",
+        "pull-request-issue-reconciliation",
+        "invalid-pull-request-state",
+        "invalid-issue-state",
+    }
+    if reason in blocking_reasons:
+        return status(
+            health="blocked",
+            blocking=True,
+            owner="dispatcher",
+            reason=reason,
+            current=f"{scope} 不符合 canonical loop state。",
+            next_step=(
+                "dispatcher 必須執行 canonical reconciliation，修正互斥狀態、"
+                "blocked marker 或 Issue／PR 配對後才能繼續。"
+            ),
+            attention=f"durable state blocker: {reason}",
+        )
+
+    if reason == "coding-work-available":
+        primary = objects[0].get("state") if objects else None
+        if primary == "loop:queued":
+            next_step = (
+                "coder 應以 canonical transaction 認領為 loop:coding，"
+                "完成聚焦工作後建立 loop:needs-review PR。"
+            )
+        else:
+            next_step = (
+                "coder 應續作目前 slice，完成驗證後建立或更新"
+                " loop:needs-review PR。"
+            )
+        return status(
+            health="healthy",
+            blocking=False,
+            owner="coder",
+            reason=reason,
+            current=f"{scope}；coder 是目前 owner。",
+            next_step=next_step,
+        )
+
+    guidance = {
+        "review-requested": (
+            "reviewer",
+            "reviewer 應審查目前 PR head，然後只留下 "
+            "loop:changes-requested 或 loop:approved 裁決。",
+        ),
+        "changes-requested": (
+            "coder",
+            "coder 應處理 finding、push 新 head，再把 PR 交回 "
+            "loop:needs-review。",
+        ),
+        "approved-pull-request": (
+            "dispatcher",
+            "dispatcher 應核對 SHA-bound 裁決與目前 main；條件仍成立才合併，"
+            "再 reconciliation Issue state。",
+        ),
+        "pull-request-disappeared": (
+            "dispatcher",
+            "dispatcher 應確認 PR 的 merge／close 結果，並清理對應 Issue state。",
+        ),
+        "oversight-heartbeat": (
+            "dispatcher",
+            "dispatcher 應檢查在途工作、停滯與 gate exit；完成後再交回目前 owner。",
+        ),
+        "reconcile-or-dispatch": (
+            "dispatcher",
+            "dispatcher 應 reconciliation 既有證據、判斷 gate exit，"
+            "或只派一個 loop:queued Issue。",
+        ),
+    }
+    owner, next_step = guidance.get(
+        reason,
+        (
+            role,
+            "dispatcher 應先核對 canonical protocol，再決定下一個安全 transaction。",
+        ),
+    )
+    return status(
+        health="healthy",
+        blocking=False,
+        owner=owner,
+        reason=reason,
+        current=f"{scope}；{owner} 是目前 owner。",
+        next_step=next_step,
+    )
+
+
 def resolve_executable(executable: str, name: str) -> str:
     if os.sep in executable:
         path = Path(executable).expanduser().resolve()
@@ -604,10 +964,12 @@ def notify_agent(
     return response
 
 
-def busy_roles(runtime_dir: Path) -> list[str]:
-    """Return roles whose lock metadata names a running Codex child."""
+def read_agent_states(
+    runtime_dir: Path,
+) -> dict[str, dict[str, object]]:
+    """Read available per-role runtime metadata without treating it as durable state."""
 
-    result: list[str] = []
+    result: dict[str, dict[str, object]] = {}
     for role in adapter.ROLES:
         try:
             metadata = json.loads(
@@ -615,7 +977,17 @@ def busy_roles(runtime_dir: Path) -> list[str]:
             )
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             continue
-        child_pid = metadata.get("child_pid") if isinstance(metadata, Mapping) else None
+        if isinstance(metadata, dict):
+            result[role] = metadata
+    return result
+
+
+def busy_roles(runtime_dir: Path) -> list[str]:
+    """Return roles whose lock metadata names a running Codex child."""
+
+    result: list[str] = []
+    for role, metadata in read_agent_states(runtime_dir).items():
+        child_pid = metadata.get("child_pid")
         if not isinstance(child_pid, int):
             continue
         try:
@@ -721,7 +1093,7 @@ def run_events(options: argparse.Namespace) -> int:
             detail=str(error),
         )
         return adapter.EX_TEMPFAIL
-    delivered: dict[str, tuple[str, float]] = {}
+    delivered: dict[str, dict[str, object]] = {}
     last_dispatcher_wake = time.monotonic()
     previous_snapshot: dict[str, object] | None = None
     dispatcher_cleanup_pending = False
@@ -748,7 +1120,13 @@ def run_events(options: argparse.Namespace) -> int:
             try:
                 snapshot = poll_github(gh_bin, workdir, repo)
                 now = time.monotonic()
+                agent_states = read_agent_states(runtime_dir)
                 busy = busy_roles(runtime_dir)
+                stalled = detect_stalled_iteration(
+                    snapshot,
+                    deliveries=delivered,
+                    agent_states=agent_states,
+                )
                 if pull_request_disappeared(previous_snapshot, snapshot):
                     dispatcher_cleanup_pending = True
                 previous_snapshot = snapshot
@@ -776,24 +1154,48 @@ def run_events(options: argparse.Namespace) -> int:
                         last_dispatcher_wake=last_dispatcher_wake,
                         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
                     )
+                delivery_failures: list[dict[str, object]] = []
+                notified_roles: set[str] = set()
                 for decision in decisions:
                     role = str(decision["role"])
                     fingerprint = event_fingerprint(decision)
                     previous = delivered.get(role)
+                    previous_fingerprint = (
+                        previous.get("fingerprint") if previous else None
+                    )
+                    previous_at = (
+                        previous.get("delivered_at") if previous else None
+                    )
                     if (
-                        previous
-                        and previous[0] == fingerprint
-                        and now - previous[1] < options.retry_seconds
+                        previous_fingerprint == fingerprint
+                        and isinstance(previous_at, (int, float))
+                        and now - previous_at < options.retry_seconds
                     ):
                         continue
                     event = build_event(decision, repo)
+                    delivery = {
+                        "fingerprint": fingerprint,
+                        "delivered_at": now,
+                        "event_id": event["event_id"],
+                        "reason": decision["reason"],
+                        "state_fingerprint": workflow_state_fingerprint(
+                            snapshot
+                        ),
+                    }
                     if options.dry_run:
-                        emit(component="events", result="would-notify", event=event)
-                        delivered[role] = (fingerprint, now)
+                        emit(
+                            component="events",
+                            result="would-notify",
+                            event=event,
+                        )
+                        delivered[role] = delivery
+                        notified_roles.add(role)
                         continue
                     try:
                         acknowledgement = notify_agent(runtime_dir, event)
                     except (OSError, ValueError, json.JSONDecodeError) as error:
+                        failure = {"role": role, "detail": str(error)}
+                        delivery_failures.append(failure)
                         emit(
                             component="events",
                             role=role,
@@ -802,7 +1204,8 @@ def run_events(options: argparse.Namespace) -> int:
                             detail=str(error),
                         )
                     else:
-                        delivered[role] = (fingerprint, now)
+                        delivered[role] = delivery
+                        notified_roles.add(role)
                         if role == "dispatcher":
                             last_dispatcher_wake = now
                             if decision["reason"] == "pull-request-disappeared":
@@ -814,6 +1217,27 @@ def run_events(options: argparse.Namespace) -> int:
                             event_id=event["event_id"],
                             acknowledgement=acknowledgement,
                         )
+                if (
+                    stalled is not None
+                    and stalled.get("role") in notified_roles
+                ):
+                    stalled = None
+                operator_status = describe_operator_status(
+                    snapshot,
+                    decisions=decisions,
+                    busy=busy,
+                    stalled=stalled,
+                    delivery_failures=delivery_failures,
+                )
+                emit(
+                    component="events",
+                    result="operator-status",
+                    repository=repo,
+                    polled_at=time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    ),
+                    **operator_status,
+                )
                 emit(
                     component="events",
                     result="poll-complete",
@@ -829,6 +1253,26 @@ def run_events(options: argparse.Namespace) -> int:
                     ],
                 )
             except ValueError as error:
+                emit(
+                    component="events",
+                    result="operator-status",
+                    repository=repo,
+                    polled_at=time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    ),
+                    health="blocked",
+                    blocking=True,
+                    owner="operator",
+                    reason="github-poll-failed",
+                    current="event manager 無法讀取 GitHub durable state。",
+                    next=(
+                        "檢查 GitHub CLI authentication、network 與 GraphQL"
+                        " response；恢復讀取前不要手動推進 state。"
+                    ),
+                    attention=str(error),
+                    busy_roles=busy_roles(runtime_dir),
+                    objects=[],
+                )
                 print(f"codex-loop: {error}", file=sys.stderr)
                 if options.once or options.dry_run:
                     return 2

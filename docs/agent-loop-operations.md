@@ -121,6 +121,27 @@ cd /home/guojun/workspace/emmet-qt-book
 | 左下 | reviewer agent |
 | 右下 | event manager |
 
+### 右下角：流程健康與下一步
+
+右下角 event manager 每次 poll 都輸出一筆 `operator-status`。先看
+`health`、`blocking`、`owner`，再讀 `current`、`next` 與 `attention`；
+最後一筆就是目前判定。這和 `tmux status` 不同：後者只證明 process、session 與
+runner 版本健康，不能證明 workflow 正在前進。
+
+| 畫面值 | 操作者判讀 |
+| --- | --- |
+| `health=healthy` | state 合法；依 `owner`／`next` 等待下一個 transaction |
+| `health=running` | 一個 role 正在執行；先等待，不手動啟動第二輪 |
+| `health=paused` | 使用者的 durable brake 生效；確認安全後仍只由使用者移除 |
+| `health=blocked` | 讀 `reason`／`attention`，修復 state、component 或 GitHub 讀取 |
+| `health=stalled` | iteration 結束但 workflow fingerprint 未變，推進已實質停住 |
+
+`health=stalled` 時，先到 `attention` 指定的 role pane 看最後輸出。若是 mutation
+被 approval／安全政策拒絕，保留 fail-closed 現場，由 dispatcher 核對 durable state；
+需要新授權時交由使用者明確處理後再讓 manager 重送，不能換命令或繞道執行。若是
+component／socket 錯誤，狀態會是 `health=blocked` 與
+`reason=delivery-failed`。單看反覆出現的 routing decision 不代表已送達或有進度。
+
 啟動成功會 attach session；在 tmux 按 `Ctrl-b d` 只會 detach，四個 component
 繼續運作。重新觀看：
 
