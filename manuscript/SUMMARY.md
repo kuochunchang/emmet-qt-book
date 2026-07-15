@@ -13,7 +13,7 @@
 # 第二篇　先理解怎麼賺，也理解怎麼虧
 
 - [一筆現貨交易的完整故事](chapters/05-spot-trade-ledger.md)
-- [成本決定策略能不能活下來]()
+- [成本決定策略能不能活下來](chapters/06-costs-breakeven.md)
 - [永續合約、做多做空與兩個錢包]()
 - [槓桿、標記價格、保證金與強制平倉]()
 - [兩個訓練案例：中性不等於無風險，網格不等於穩定]()
@@ -87,8 +87,8 @@
 
 [A. 數學與統計基礎]()
 [B. 交易損益與衍生品公式](appendices/b-trading-pnl-formulas.md)
-[C. 績效與風險指標]()
-[D. 市場微結構]()
+[C. 績效與風險指標](appendices/c-performance-risk-metrics.md)
+[D. 市場微結構](appendices/d-market-microstructure.md)
 [E. 永續合約與 Binance 市場機制]()
 [F. 時間、資料與研究偏誤]()
 [G. 策略研究與統計驗證]()

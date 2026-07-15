@@ -543,3 +543,151 @@ revalidation_triggers = [
   "第 6 章成本內容回溯改變本章零成本邊界",
   "配套基線 tag 或 commit 改變",
 ]
+
+[[records]]
+id = "ch06-decimal-cost-breakeven"
+batch = "W1"
+document = "manuscript/chapters/06-costs-breakeven.md"
+chapter = "成本決定策略能不能活下來"
+claim = "以字串建立的 Decimal 固定現貨往返可逐格重現 entry／exit 名義價值、base／quote 計價費用、spread、滑點、換手率、gross／net PnL、實際成交價與參考價損益兩平門檻、期望值及容量情境，且現金與成本分解證明每項成本只扣一次。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項只使用章內固定 Decimal 常數與明示容量情境，不載入外部或市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項是獨立手算與決策 oracle，不呼叫 Emmet 正式產品入口或報告 schema。"
+evidence_refs = [
+  "book:manuscript/chapters/06-costs-breakeven.md",
+  "book:manuscript/appendices/b-trading-pnl-formulas.md",
+  "book:manuscript/appendices/c-performance-risk-metrics.md",
+  "book:manuscript/appendices/d-market-microstructure.md",
+]
+verification_commands = [
+  "uv run python -c 'from decimal import Decimal as D; c0=D(\"15000.00\"); q=D(\"0.50000000\"); mi=D(\"20000.00\"); a=D(\"20010.00\"); pb=D(\"20020.00\"); mo=D(\"20200.00\"); b=D(\"20190.00\"); ps=D(\"20180.00\"); rb=D(\"0.001\"); rs=D(\"0.001\"); ni=q*pb; fb=q*rb; qn=q-fb; no=qn*ps; fs=no*rs; cf=c0-ni+no-fs; net=cf-c0; ideal=(mo-mi)*q; spread=((a-mi)+(mo-b))*q; slip=((pb-a)+(b-ps))*q; gross=(ps-pb)*q; fees=fb*ps+fs; cost=spread+slip+fees; pbe=pb/((D(\"1\")-rb)*(D(\"1\")-rs)); mbe=pbe+(mo-ps); p=D(\"0.55\"); wg=D(\"120.00\"); lg=D(\"-80.00\"); eg=p*wg+(D(\"1\")-p)*lg; en=p*(wg-cost)+(D(\"1\")-p)*(lg-cost); cap=D(\"2.00\")*D(\"0.25\"); stress=D(\"1.00\")*D(\"0.25\"); assert ideal-spread-slip==gross; assert gross-fees==net==D(\"59.830090\"); assert cf==D(\"15059.830090\"); assert pbe==D(\"20060.10014018022026030034038\"); assert mbe==D(\"20080.10014018022026030034038\"); assert eg-cost==en==D(\"-10.169910\"); assert cap==q and stress<q; print(\"cash-oracle=PASS\"); print(\"cost-decomposition=PASS\"); print(\"expectancy-cost-once=PASS\"); print(\"capacity-scenario=PASS\")'",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "cash-oracle=PASS",
+  "cost-decomposition=PASS",
+  "expectancy-cost-once=PASS",
+  "capacity-scenario=PASS",
+]
+result = "pass"
+observed = "entry／exit 名義價值為 10010.00／10079.910000 USDT；進場費 0.00050000 BTC、出場費 10.079910 USDT；spread／滑點各 10.000000 USDT；總成本 40.169910、淨 PnL 59.830090、最終現金 15059.830090 USDT；實際成交價／參考 mid 損益兩平為 20060.100140180／20080.100140180 USDT/BTC；淨期望值 -10.169910 USDT；四組 oracle 皆 PASS。"
+known_differences = [
+  "費率、報價、成交價、深度與參與率皆為教學輸入，不是即時市場或帳戶事實。",
+  "容量只是一組 fail-closed 壓力情境，未使用版本化 order-book 資料或市場衝擊模型。",
+  "案例不含部分成交、稅務、利息、折扣資產或多批成本基礎。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "章內價格、數量、費率、計費資產、換手率定義、期望值或容量情境改變",
+  "附錄 B／C／D 對成本、績效或微結構的公式與適用前提改變",
+  "固定 Decimal 命令、預期輸出或 oracle 改變",
+  "配套基線 tag 或 commit 改變",
+]
+
+[[records]]
+id = "ch06-v030-fill-cost-boundaries"
+batch = "W1"
+document = "manuscript/chapters/06-costs-breakeven.md"
+chapter = "成本決定策略能不能活下來"
+claim = "v0.3.0 的 FeeSchedule 分列 maker／taker 與 spot／futures Decimal 費率；FillDecision 保存 base／final price、流動性、費率、費用與計費資產；spot BUY 費用以 base、SELL 費用以 quote 計算，volume cap 只構成 bar 成交量代理，spot LIMIT 預設 admission 與 spot post-only 仍受限制。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：聚焦測試使用程式內固定 Decimal 與 bar 案例，不載入外部市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "quant.common.fill.config.FeeSchedule",
+  "quant.common.fill.config.FillConfig",
+  "quant.common.fill.models.Liquidity",
+  "quant.common.fill.models.FillDecision",
+]
+interface_note = "以已發布內部撮合模型與聚焦測試支撐概念對照；這些 package 路徑不是正式讀者成本報告入口。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:src/quant/common/fill/config.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/models.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/simulator.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/orders.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/admission.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_base.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_simulator_edges.py",
+]
+verification_commands = [
+  "git grep -n -F 'spot_maker: Decimal' HEAD -- src/quant/common/fill/config.py",
+  "git grep -n -F 'spot_taker: Decimal' HEAD -- src/quant/common/fill/config.py",
+  "git grep -n -F 'liquidity: Liquidity' HEAD -- src/quant/common/fill/models.py",
+  "git grep -n -F 'return qty * fee_rate, rules.base_asset' HEAD -- src/quant/common/fill/simulator.py",
+  "git grep -n -F 'return qty * final_price * fee_rate, rules.quote_asset' HEAD -- src/quant/common/fill/simulator.py",
+  "git grep -n -F 'post_only 僅期貨可用' HEAD -- src/quant/common/models/orders.py",
+  "git grep -n -F 'allow_spot_maker: bool = False' HEAD -- src/quant/common/engine/admission.py",
+  "uv run pytest tests/unit/test_fill_base.py::TestConfigAndDecimalBoundary::test_fill_config_defaults_and_validation tests/unit/test_fill_simulator_edges.py::TestMaterialization::test_market_liquidity_fee_rate_and_asset tests/unit/test_fill_base.py::TestFillSimulator::test_volume_cap_truncates_without_mutating_book -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "spot_maker: Decimal",
+  "spot_taker: Decimal",
+  "liquidity: Liquidity",
+  "return qty * fee_rate, rules.base_asset",
+  "return qty * final_price * fee_rate, rules.quote_asset",
+  "post_only 僅期貨可用",
+  "allow_spot_maker: bool = False",
+  "6 passed",
+]
+result = "pass"
+observed = "所有精確欄位與限制文字均存在；fee schedule、四組 market／side／liquidity 計費資產案例及 volume-cap 聚焦測試共 6 passed。"
+known_differences = [
+  "v0.3.0 的 spot maker／taker 預設費率相同；第 6 章的 maker 低費率只作手算敏感度，不宣稱是系統或帳戶現況。",
+  "volume_cap_pct 使用 bar volume proxy，不是 live order-book 深度或真實容量證明。",
+  "v0.3.0 未提供正式讀者成本歸因報告；spot LIMIT 預設 admission 與 spot post-only 邊界不能被概念章繞過。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "FeeSchedule、FillConfig、FillDecision、Liquidity 或 FillSimulator 費用／滑點語義改變",
+  "spot 計費資產、LIMIT admission 或 post-only 邊界改變",
+  "聚焦測試名稱、行為或預期通過數量改變",
+  "第 6 章系統對照或配套基線改變",
+]
+
+[[records]]
+id = "ch06-binance-orderbook-commission-source"
+batch = "W1"
+document = "manuscript/chapters/06-costs-breakeven.md"
+chapter = "成本決定策略能不能活下來"
+claim = "Binance 官方 Spot API 固定文件的 order-book schema 分列 bids／asks，commission schema 分列 maker／taker，且 LIMIT_MAKER 不會立即以 taker 成交；第 6 章只以此支持欄位與訂單意圖邊界，不採用文件範例費率、價格或深度作市場現況。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項查證官方 API 文件欄位與訂單語義，不下載或使用市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "Binance Spot GET /api/v3/depth response: bids／asks",
+  "Binance Spot commission schema: maker／taker",
+  "Binance Spot LIMIT_MAKER order type",
+]
+interface_note = "以 Binance 官方 Spot API 文件固定 commit 查證公開 schema 與語義；本章不呼叫交易或私人帳戶端點。"
+evidence_refs = [
+  "url:https://github.com/binance/binance-spot-api-docs/blob/4987e707f84f20d736ee6a2bcb71396111cffee1/rest-api.md",
+]
+verification_commands = [
+  "python3 -c 'from urllib.request import urlopen; u=\"https://raw.githubusercontent.com/binance/binance-spot-api-docs/4987e707f84f20d736ee6a2bcb71396111cffee1/rest-api.md\"; t=urlopen(u, timeout=30).read().decode(); needles=[\"\\\"bids\\\"\", \"\\\"asks\\\"\", \"standardCommissionForOrder\", \"\\\"maker\\\"\", \"\\\"taker\\\"\", \"This is a `LIMIT` order that will be rejected if the order immediately matches and trades as a taker\"]; missing=[x for x in needles if x not in t]; assert not missing, missing; print(\"official-orderbook-commission=PASS\")'",
+]
+executable = false
+executable_note = "不適用：第一手外部文件需連網並在發布前重新查證，不納入 deterministic book-check 的自動執行層。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "official-orderbook-commission=PASS",
+]
+result = "pass"
+observed = "官方文件 commit 4987e707f84f20d736ee6a2bcb71396111cffee1 同時包含 bids／asks、maker／taker commission 欄位與 LIMIT_MAKER 語義；未採用其中範例數字作現行費率或市場深度。"
+known_differences = [
+  "外部文件、API 與交易所規則可能改變；發布前仍須重新查證。",
+  "固定文件只支持欄位與訂單語義，不支持即時報價、帳戶費率、成交保證或容量。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Binance Spot API order-book、commission 或 LIMIT_MAKER 文件語義改變",
+  "固定來源 commit 或第 6 章外部市場事實敘述改變",
+  "發布前市場事實重新查證",
+]
