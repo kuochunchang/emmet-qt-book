@@ -411,3 +411,135 @@ revalidation_triggers = [
   "開發 Phase 對應或第 3 章三項交付檢查改變",
   "配套基線 tag 或 commit 改變",
 ]
+
+[[records]]
+id = "ch05-binance-base-quote-source"
+batch = "W1"
+document = "manuscript/chapters/05-spot-trade-ledger.md"
+chapter = "一筆現貨交易的完整故事"
+claim = "Binance 官方 Spot API 的 exchangeInfo schema 明確區分 baseAsset 與 quoteAsset；第 5 章只以此支持交易對欄位語義，不把文件範例延伸成即時價格、狀態或帳戶事實。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項查證官方 API 文件的欄位語義，不下載或使用市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "Binance Spot GET /api/v3/exchangeInfo response: symbols[].baseAsset",
+  "Binance Spot GET /api/v3/exchangeInfo response: symbols[].quoteAsset",
+]
+interface_note = "以 Binance 官方 Spot API 文件的固定 commit 查證 exchangeInfo schema；本章不呼叫交易端點。"
+evidence_refs = [
+  "url:https://github.com/binance/binance-spot-api-docs/blob/4987e707f84f20d736ee6a2bcb71396111cffee1/rest-api.md#exchange-information",
+]
+verification_commands = [
+  "gh api --method GET repos/binance/binance-spot-api-docs/commits -f path=rest-api.md -f per_page=1 --jq '.[0].sha'",
+  "python3 -c 'from urllib.request import urlopen; u=\"https://raw.githubusercontent.com/binance/binance-spot-api-docs/4987e707f84f20d736ee6a2bcb71396111cffee1/rest-api.md\"; t=urlopen(u, timeout=30).read().decode(); assert \"\\\"baseAsset\\\"\" in t and \"\\\"quoteAsset\\\"\" in t; print(\"official-base-quote=PASS\")'",
+]
+executable = false
+executable_note = "不適用：第一手外部文件需連網並在發布前重新查證，不納入 deterministic book-check 的自動執行層。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "4987e707f84f20d736ee6a2bcb71396111cffee1",
+  "official-base-quote=PASS",
+]
+result = "pass"
+observed = "官方文件 commit 4987e707f84f20d736ee6a2bcb71396111cffee1 的 exchangeInfo 回應範例同時包含 baseAsset 與 quoteAsset。"
+known_differences = [
+  "外部文件與交易所規則可能改變；本筆只支持欄位語義，發布前仍須重新查證，不支持即時價格或可交易狀態。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Binance Spot API 文件、exchangeInfo schema 或固定來源 commit 改變",
+  "第 5 章對 base／quote 或交易所現況的敘述改變",
+  "發布前市場事實重新查證",
+]
+
+[[records]]
+id = "ch05-v030-spot-accounting"
+batch = "W1"
+document = "manuscript/chapters/05-spot-trade-ledger.md"
+chapter = "一筆現貨交易的完整故事"
+claim = "v0.3.0 的 SymbolRules 保存 base／quote asset；SpotWallet 分資產保存 free／locked；Position 提供 signed quantity、notional 與 unrealized PnL 公式；AccountingLedger 的 spot 買賣與 property test 維持逐資產流量及非負餘額。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：聚焦測試使用程式內固定 Decimal 案例，不載入市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "quant.common.rules.filters.SymbolRules",
+  "quant.common.models.account.Balance",
+  "quant.common.models.account.SpotWallet",
+  "quant.common.models.account.Position",
+]
+interface_note = "以已發布模型、內部會計實作與測試支撐概念對照；package 路徑不是讀者損益報告入口。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:src/quant/common/rules/filters.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/account.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/accounting.py",
+  "repo:emmet-qt-bt1:tests/unit/test_models_account.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_accounting.py",
+]
+verification_commands = [
+  "git grep -n -F 'base_asset: str' HEAD -- src/quant/common/rules/filters.py",
+  "git grep -n -F 'quote_asset: str' HEAD -- src/quant/common/rules/filters.py",
+  "git grep -n -F 'return abs(self.signed_qty) * self.mark_price' HEAD -- src/quant/common/models/account.py",
+  "git grep -n -F 'return (self.mark_price - self.entry_price) * self.signed_qty' HEAD -- src/quant/common/models/account.py",
+  "uv run pytest tests/unit/test_models_account.py::TestPosition::test_spot_view_no_margin_fields tests/unit/test_engine_accounting.py::TestSpotFills::test_spot_buy_partial_and_gap_topup_accounting tests/unit/test_engine_accounting.py::TestSpotFills::test_spot_sell_consumes_base_and_credits_quote_net_fee tests/unit/test_engine_accounting.py::test_spot_buy_conserves_each_asset_and_clears_terminal_reservation -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "base_asset: str",
+  "quote_asset: str",
+  "return abs(self.signed_qty) * self.mark_price",
+  "return (self.mark_price - self.entry_price) * self.signed_qty",
+  "4 passed",
+]
+result = "pass"
+observed = "四項聚焦測試通過；spot view 的重估公式、買入、賣出及逐資產守恆行為與第 5 章系統邊界一致。"
+known_differences = [
+  "v0.3.0 的現貨 ledger 保存資產流與成交證據，未提供會自動選定多批 spot 成本基礎的正式讀者損益報告。",
+  "聚焦測試含 fee 行為以核對已發布會計，但第 5 章手算案例明確採零費用；完整成本教學留給第 6 章。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "SymbolRules、Balance、SpotWallet、Position 或 AccountingLedger 的現貨語義改變",
+  "聚焦測試名稱、行為或預期通過數量改變",
+  "第 5 章系統對照或配套基線改變",
+]
+
+[[records]]
+id = "ch05-decimal-spot-ledger"
+batch = "W1"
+document = "manuscript/chapters/05-spot-trade-ledger.md"
+chapter = "一筆現貨交易的完整故事"
+claim = "以字串建立的 Decimal 固定案例可逐步重現買入、持有重估與全部賣出後的現金、資產數量、已實現／未實現 PnL、標記權益及兩組核對式。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項只使用章內固定 Decimal 常數，不載入外部或市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項是獨立手算 oracle，不呼叫 Emmet 正式產品入口或報告 schema。"
+evidence_refs = [
+  "book:manuscript/chapters/05-spot-trade-ledger.md",
+  "book:manuscript/appendices/b-trading-pnl-formulas.md",
+]
+verification_commands = [
+  "uv run python -c 'from decimal import Decimal as D; c0=D(\"10000.00\"); q=D(\"0.25\"); pb=D(\"20000.00\"); m=D(\"21200.00\"); ps=D(\"20800.00\"); cb=c0-q*pb; u=(m-pb)*q; em=cb+q*m; cf=cb+q*ps; r=(ps-pb)*q; assert em==c0+u==D(\"10300.00\"); assert cf==c0+r==D(\"10200.00\"); print(\"asset-flow=PASS\"); print(\"pnl-equity=PASS\")'",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "asset-flow=PASS",
+  "pnl-equity=PASS",
+]
+result = "pass"
+observed = "買入名義價值 5000.00 USDT；重估價值 5300.00、未實現 PnL 300.00、權益 10300.00 USDT；賣出名義價值 5200.00、已實現 PnL 200.00、最終現金與權益 10200.00 USDT；兩組 oracle 皆 PASS。"
+known_differences = [
+  "案例刻意排除費率、spread、滑點、多批成本基礎、借貸、稅務、部分成交與外部入出金；任一前提加入後必須擴充公式並重驗。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "章內固定價格、數量、Decimal 命令、預期輸出或核對式改變",
+  "附錄 B 的現貨公式、符號、單位或適用前提改變",
+  "第 6 章成本內容回溯改變本章零成本邊界",
+  "配套基線 tag 或 commit 改變",
+]
