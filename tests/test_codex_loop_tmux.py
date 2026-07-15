@@ -37,6 +37,27 @@ class CodexLoopTmuxTests(unittest.TestCase):
             self.assertRaises(SystemExit),
         ):
             parser.parse_args(["--interval-seconds", "nan"])
+        profiles = parser.parse_args(
+            [
+                "--profile",
+                "loop",
+                "--dispatcher-profile",
+                "loop-dispatcher",
+                "--coder-profile",
+                "loop_coder",
+                "--reviewer-profile",
+                "loop-reviewer",
+            ]
+        )
+        self.assertEqual("loop", profiles.profile)
+        self.assertEqual("loop-dispatcher", profiles.dispatcher_profile)
+        self.assertEqual("loop_coder", profiles.coder_profile)
+        self.assertEqual("loop-reviewer", profiles.reviewer_profile)
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            parser.parse_args(["--coder-profile", "not/a/profile"])
 
     def test_runner_workdirs_are_dedicated_siblings(self) -> None:
         root = Path("/workspace/emmet-qt-book")
@@ -71,6 +92,76 @@ class CodexLoopTmuxTests(unittest.TestCase):
             self.assertIn("--tmux-title", command)
             self.assertIn("--tmux-bin", command)
 
+    def test_role_profiles_override_the_shared_profile(self) -> None:
+        commands = launcher.build_component_commands(
+            Path("/trusted/scripts/codex-loop"),
+            launcher.runner_workdirs(Path("/workspace/emmet-qt-book")),
+            interval_seconds=60,
+            retry_seconds=1800,
+            dispatcher_heartbeat_seconds=1800,
+            profile="loop",
+            role_profiles={
+                "dispatcher": "loop-dispatcher",
+                "coder": None,
+                "reviewer": "loop-reviewer",
+            },
+        )
+
+        self.assertEqual(
+            ["--profile", "loop-dispatcher"],
+            commands["dispatcher"][-2:],
+        )
+        self.assertEqual(["--profile", "loop"], commands["coder"][-2:])
+        self.assertEqual(
+            ["--profile", "loop-reviewer"],
+            commands["reviewer"][-2:],
+        )
+        self.assertNotIn("--profile", commands["events"])
+
+    def test_profile_files_must_exist_and_contain_valid_toml(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            (codex_home / "valid.config.toml").write_text(
+                'model = "example-model"\n'
+                'model_reasoning_effort = "high"\n',
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ, {"CODEX_HOME": str(codex_home)}
+            ):
+                launcher.validate_profile_files(
+                    {
+                        "dispatcher": "valid",
+                        "coder": "valid",
+                        "reviewer": None,
+                    }
+                )
+                with self.assertRaisesRegex(
+                    launcher.LauncherError, "找不到 Codex profile"
+                ):
+                    launcher.validate_profile_files(
+                        {
+                            "dispatcher": "missing",
+                            "coder": None,
+                            "reviewer": None,
+                        }
+                    )
+
+                (codex_home / "broken.config.toml").write_text(
+                    "model = [\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    launcher.LauncherError, "無法解析 Codex profile"
+                ):
+                    launcher.validate_profile_files(
+                        {
+                            "dispatcher": "broken",
+                            "coder": None,
+                            "reviewer": None,
+                        }
+                    )
+
     def test_preflight_checks_the_selected_profile_for_every_agent(self) -> None:
         runners = launcher.runner_workdirs(Path("/workspace/emmet-qt-book"))
         with mock.patch.object(launcher, "run_command") as run:
@@ -85,6 +176,29 @@ class CodexLoopTmuxTests(unittest.TestCase):
             self.assertIn("loop", command)
             self.assertEqual("--dry-run", command[-1])
         self.assertNotIn("--profile", run.call_args_list[3].args[0])
+
+    def test_preflight_uses_each_roles_resolved_profile(self) -> None:
+        runners = launcher.runner_workdirs(Path("/workspace/emmet-qt-book"))
+        with mock.patch.object(launcher, "run_command") as run:
+            launcher.run_preflight(
+                Path("/trusted/scripts/codex-loop"),
+                runners,
+                role_profiles={
+                    "dispatcher": "loop-dispatcher",
+                    "coder": "loop-coder",
+                    "reviewer": "loop-reviewer",
+                },
+            )
+
+        for call, selected in zip(
+            run.call_args_list[:3],
+            ("loop-dispatcher", "loop-coder", "loop-reviewer"),
+            strict=True,
+        ):
+            self.assertEqual(
+                ["--profile", selected, "--dry-run"],
+                call.args[0][-3:],
+            )
 
     def test_dry_run_does_not_call_mutating_helpers(self) -> None:
         options = launcher.parser().parse_args(["restart", "--dry-run"])
@@ -290,6 +404,36 @@ class CodexLoopTmuxTests(unittest.TestCase):
             tmux.call_args_list,
         )
 
+    def test_session_profile_metadata_round_trips(self) -> None:
+        stored: dict[str, str] = {}
+
+        def fake_tmux(
+            _tmux_bin: str, *arguments: str, check: bool = True
+        ) -> subprocess.CompletedProcess[str]:
+            del check
+            if arguments[0] == "set-option":
+                stored[arguments[-2]] = arguments[-1]
+                return self.completed()
+            if arguments[0] == "show-options":
+                return self.completed(stored.get(arguments[-1], "") + "\n")
+            raise AssertionError(arguments)
+
+        profiles = {
+            "dispatcher": "loop-dispatcher",
+            "coder": "loop-coder",
+            "reviewer": "loop-reviewer",
+        }
+        with mock.patch.object(
+            launcher, "tmux_command", side_effect=fake_tmux
+        ):
+            launcher.set_session_role_profiles(
+                "tmux", "test-loop", profiles
+            )
+            self.assertEqual(
+                profiles,
+                launcher.session_role_profiles("tmux", "test-loop"),
+            )
+
     def test_failed_start_cleanup_stops_around_owned_session_removal(
         self,
     ) -> None:
@@ -419,6 +563,11 @@ class CodexLoopTmuxTests(unittest.TestCase):
                     launcher, "create_tmux_session", return_value=panes
                 ),
                 mock.patch.object(
+                    launcher,
+                    "set_session_role_profiles",
+                    side_effect=lambda *_args: order.append("profiles"),
+                ),
+                mock.patch.object(
                     launcher, "send_pane_command", side_effect=send
                 ),
                 mock.patch.object(
@@ -438,6 +587,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
 
         self.assertEqual(
             [
+                "profiles",
                 "send:%1",
                 "send:%2",
                 "send:%3",
