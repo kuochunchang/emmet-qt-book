@@ -1,13 +1,14 @@
 # B. 交易損益與衍生品公式
 
-本附錄目前只收錄第 5–6 章直接需要的現貨名義價值、部位、已實現／未實現損益、
-標記權益、交易成本、換手率與損益兩平公式。永續、槓桿、保證金、強平、資金費
-與多腿淨敞口會隨對應 active 正文補寫；尚未出現的公式不應由讀者自行推測成
-系統行為。
+本附錄目前只收錄第 5–7 章直接需要的現貨名義價值、部位、已實現／未實現損益、
+標記權益、交易成本、換手率與損益兩平公式，以及 U 本位線性永續的 signed
+position、名義價值、未實現損益與資金費現金流。槓桿、保證金、強平與多腿淨
+敞口會隨對應 active 正文補寫；尚未出現的公式不應由讀者自行推測成系統行為。
 
-正文的安全判斷與完整案例見[第 5 章](../chapters/05-spot-trade-ledger.md)與
-[第 6 章](../chapters/06-costs-breakeven.md)。本頁是符號、單位與適用前提的延伸
-查表，不能取代逐格資產流與成本稽核。
+正文的安全判斷與完整案例見[第 5 章](../chapters/05-spot-trade-ledger.md)、
+[第 6 章](../chapters/06-costs-breakeven.md)與
+[第 7 章](../chapters/07-perpetual-dual-wallet-funding.md)。本頁是符號、單位與
+適用前提的延伸查表，不能取代逐格資產流、成本稽核或雙錢包核對。
 
 ## 符號與單位
 
@@ -17,9 +18,18 @@
 | `s` | 成交方向 | 無單位 | 買入 `+1`，賣出 `-1` |
 | `ΔQ` | 成交造成的部位變化 | base asset | `ΔQ = s × q` |
 | `Q` | 成交後累積部位／餘額曝險 | base asset | 無借貸現貨案例要求 `Q >= 0` |
+| `Q_perp` | U 本位線性永續的帶方向合約數量；第 7 章正文簡寫為 `Q` | base asset | 多頭 `> 0`、空頭 `< 0`、零持倉 `= 0` |
 | `p_buy` | 買入成交價 | quote/base | 必須為正 |
 | `p_sell` | 賣出成交價 | quote/base | 必須為正 |
 | `m` | 指定時點的重估價 | quote/base | 是估值輸入，不保證可成交 |
+| `p_entry,perp` | 永續部位的開倉均價 | quote/base | 必須為正 |
+| `m_f` | 資金費結算時點的永續標記價格 | quote/base | 必須為正，且時點須與該次結算相符 |
+| `r_f` | 單次資金費率 | 無單位 | 十進位帶正負號比例；方向不可省略 |
+| `CF_funding` | 從帳戶觀點記錄的資金費現金流 | quote asset | 收取為正、支付為負 |
+| `W_before`、`W_after` | 資金費入帳前／後的期貨 wallet balance | quote asset | 不包含未實現 PnL |
+| `E_futures` | 資金費入帳並按 `m_f` 重估後的期貨權益核對值 | quote asset | `W_after + U_perp` |
+| `N_perp` | 永續合約名義價值 | quote asset | `abs(Q_perp) × m_f`，一律非負 |
+| `U_perp` | 永續合約價格未實現損益 | quote asset | `(m_f - p_entry,perp) × Q_perp` |
 | `C` | 報價資產現金餘額 | quote asset | 與 base 餘額分開保存 |
 | `N` | 成交名義價值 | quote asset | 一律非負 |
 | `V` | 部位重估價值 | quote asset | 依 `m` 改變 |
@@ -223,14 +233,53 @@ T = (N_entry + N_exit) / E_initial
 分子同時計入買賣兩邊的實際成交名義價值，分母是本輪開始時的 quote 權益。其他
 報告若採單邊名義價值、平均權益或日均資產，必須改名或明示定義，不能直接比較。
 
+## U 本位線性永續：signed position、名義價值與資金費
+
+本節只適用於第 7 章的單向持倉 U 本位線性永續。`Q_perp` 以 base asset 表示
+合約數量，價格、名義價值、損益與期貨錢包則以 quote asset 表示：
+
+```text
+N_perp = abs(Q_perp) × m_f                         [quote]
+U_perp = (m_f - p_entry,perp) × Q_perp            [quote]
+CF_funding = -Q_perp × m_f × r_f                  [quote]
+```
+
+名義價值一律非負；方向只保留在 `Q_perp`、價格損益與資金費現金流。以帳戶觀點
+判讀資金費時：
+
+| 條件 | `CF_funding` 的方向 |
+|---|---|
+| `Q_perp > 0` 且 `r_f > 0` | `< 0`，多頭支付 |
+| `Q_perp < 0` 且 `r_f > 0` | `> 0`，空頭收取 |
+| `Q_perp = 0` 或 `r_f = 0` | `= 0` |
+
+負費率時多空方向反轉。每筆紀錄必須保存 funding time、`r_f` 與相符的 `m_f`；
+不能把某一期的費率或固定八小時間隔外推到下一期。
+
+資金費是期貨錢包的一筆獨立現金流，不是現貨／期貨 transfer。令 `U_perp` 已用
+同一結算標記價格重估：
+
+```text
+W_after = W_before + CF_funding                    [quote]
+E_futures = W_after + U_perp
+          = W_before + CF_funding + U_perp         [quote]
+```
+
+`W_after` 已包含資金費，不能再加一次 `CF_funding`；`N_perp` 只是曝險規模，也
+不能加進權益。產品模式與雙錢包最小查表見
+[附錄 E](e-perpetual-binance-mechanics.md)。
+
 ## 適用邊界
 
 - 期望值、勝率、賠率與容量查表見附錄 C；本附錄不把績效統計塞進資產流公式。
 - maker／taker、bid／ask、滑點與容量的市場語義查表見附錄 D。
 - 本頁的費率與計費資產是明示情境輸入，不代表任何帳戶的現行交易所費率。
-- 本頁仍不包含永續、槓桿、保證金、強平、資金費、多腿或稅務成本。
-- `m` 是現貨估值輸入，不等於永續合約標記價格，也不保證可成交。
-- signed quantity 是方向記法，不提供借貸、槓桿或放空權限。
+- 本頁的永續範圍只到第 7 章公式；仍不包含槓桿、Cross／Isolated、初始／維持
+  保證金、強平、ADL、下架、多腿或稅務成本。
+- `m` 是現貨估值輸入；`m_f` 是指定 funding time 的永續標記價格。兩者都不保證
+  可以成交，也不能互相偷換。
+- 現貨 `Q` 與永續 `Q_perp` 的符號前提不同；方向記法本身不提供借貸、槓桿、
+  放空、帳戶模式切換或下單權限。
 - 標記權益依估值價格改變；「資產流守恆」不表示權益數字固定。
 - 報價資產名稱不代表法幣存款、固定匯率或無風險資產。
 - 本附錄不提供會計、稅務或法律上的個別意見。

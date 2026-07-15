@@ -691,3 +691,159 @@ revalidation_triggers = [
   "固定來源 commit 或第 6 章外部市場事實敘述改變",
   "發布前市場事實重新查證",
 ]
+
+[[records]]
+id = "ch07-decimal-dual-wallet-funding"
+batch = "W1"
+document = "manuscript/chapters/07-perpetual-dual-wallet-funding.md"
+chapter = "永續合約、做多做空與兩個錢包"
+claim = "以字串建立的 Decimal 固定案例可分列多頭、空頭與零持倉，重現 U 本位線性永續名義價值、價格未實現 PnL、資金費現金流、結算後期貨錢包與標記後權益，並證明現貨錢包隔離及資金費只入帳一次。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項只使用章內固定 Decimal 常數與三個互斥帳戶快照，不載入外部或市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項是獨立手算與帳戶核對 oracle，不呼叫 Emmet 正式產品入口或報告 schema。"
+evidence_refs = [
+  "book:manuscript/chapters/07-perpetual-dual-wallet-funding.md",
+  "book:manuscript/appendices/b-trading-pnl-formulas.md",
+  "book:manuscript/appendices/e-perpetual-binance-mechanics.md",
+]
+verification_commands = [
+  "uv run python -c 'from decimal import Decimal as D; e=D(\"20000.00\"); m=D(\"20400.00\"); r=D(\"0.0005\"); w=D(\"2000.00\"); spot=(D(\"5000.00\"),D(\"0.25000000\")); qs={\"long\":D(\"0.50000000\"),\"short\":D(\"-0.50000000\"),\"flat\":D(\"0\")}; rows={k:(abs(q)*m,(m-e)*q,-q*m*r,w-q*m*r,w-q*m*r+(m-e)*q) for k,q in qs.items()}; assert rows[\"long\"]==(D(\"10200.0000000000\"),D(\"200.0000000000\"),D(\"-5.100000000000\"),D(\"1994.900000000000\"),D(\"2194.900000000000\")); assert rows[\"short\"]==(D(\"10200.0000000000\"),D(\"-200.0000000000\"),D(\"5.100000000000\"),D(\"2005.100000000000\"),D(\"1805.100000000000\")); assert rows[\"flat\"]==(0,0,0,w,w); assert spot==(D(\"5000.00\"),D(\"0.25000000\")); assert all(x[4]==w+x[2]+x[1] for x in rows.values()); print(\"directional-pnl=PASS\"); print(\"funding-sign=PASS\"); print(\"dual-wallet-isolation=PASS\"); print(\"no-double-count=PASS\")'",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "directional-pnl=PASS",
+  "funding-sign=PASS",
+  "dual-wallet-isolation=PASS",
+  "no-double-count=PASS",
+]
+result = "pass"
+observed = "多空名義價值皆為 10200.00 USDT；價格未實現 PnL 為 +200.00／-200.00 USDT；正費率現金流為 -5.10／+5.10 USDT；零倉為零；結算後期貨錢包為 1994.90／2005.10／2000.00 USDT，標記後權益為 2194.90／1805.10／2000.00 USDT；四組 oracle 皆 PASS。"
+known_differences = [
+  "價格、費率、部位與錢包餘額都是教學輸入，不是即時市場、帳戶或可成交事實。",
+  "案例不含手續費、槓桿、Cross／Isolated 保證金、強平、ADL、下架、多腿、transfer 或稅務。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "章內價格、數量、費率、錢包餘額、Decimal 命令、預期輸出或核對式改變",
+  "附錄 B／E 的 signed position、資金費或雙錢包公式與適用前提改變",
+  "配套基線 tag 或 commit 改變",
+]
+
+[[records]]
+id = "ch07-v030-perpetual-funding-accounting"
+batch = "W1"
+document = "manuscript/chapters/07-perpetual-dual-wallet-funding.md"
+chapter = "永續合約、做多做空與兩個錢包"
+claim = "v0.3.0 的 Position 以 signed_qty 表示單向多空並計算非負名義價值與未實現 PnL；AccountState 分開保存 SpotWallet／FuturesWallet；FundingSettlement 以 -signed_qty×mark×rate 建立 posting，AccountingLedger 驗證後只更新期貨錢包與相符部位，並拒絕重複或不一致入帳。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：聚焦測試使用程式內固定 Decimal 帳戶、部位與 funding event，不載入市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "quant.common.models.account.Position",
+  "quant.common.models.account.SpotWallet",
+  "quant.common.models.account.FuturesWallet",
+  "quant.common.models.account.AccountState",
+  "quant.common.models.funding.FundingRate",
+  "quant.common.fill.funding.FundingPosting",
+  "quant.common.fill.funding.FundingSettlement",
+]
+interface_note = "以已發布內部模型、結算器、唯一會計實作與聚焦測試支撐概念對照；這些 package 路徑不是正式讀者交易或報告入口。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:src/quant/common/models/account.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/funding.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/funding.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/accounting.py",
+  "repo:emmet-qt-bt1:tests/unit/test_models_account.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_funding.py",
+]
+verification_commands = [
+  "git grep -n -F 'return abs(self.signed_qty) * self.mark_price' HEAD -- src/quant/common/models/account.py",
+  "git grep -n -F 'return (self.mark_price - self.entry_price) * self.signed_qty' HEAD -- src/quant/common/models/account.py",
+  "git grep -n -F 'cash_flow = -signed_qty * mark_price * due.rate' HEAD -- src/quant/common/fill/funding.py",
+  "git grep -n -F 'self._futures_wallet_balance += posting.cash_flow' HEAD -- src/quant/common/engine/accounting.py",
+  "uv run pytest tests/unit/test_models_account.py tests/unit/test_engine_funding.py -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "return abs(self.signed_qty) * self.mark_price",
+  "return (self.mark_price - self.entry_price) * self.signed_qty",
+  "cash_flow = -signed_qty * mark_price * due.rate",
+  "self._futures_wallet_balance += posting.cash_flow",
+  "40 passed",
+]
+result = "pass"
+observed = "四項精確實作邊界均存在；帳戶與 funding 聚焦測試共 40 passed，覆蓋多空未實現損益、雙錢包、正費率多方支付／空方收取、零倉零現金流、期貨錢包入帳與重複／不一致 posting 拒絕。"
+known_differences = [
+  "v0.3.0 已發布的是內部模型、結算與會計證據；尚無正式讀者交易、完整 Engine 或報告入口。",
+  "聚焦測試也涵蓋第 8 章才解釋的保證金與風險路徑；本 claim 不以測試存在提前擴寫那些主題。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Position、AccountState、FundingRate、FundingSettlement、FundingPosting 或 AccountingLedger 資金費語義改變",
+  "聚焦測試名稱、行為或預期通過數量改變",
+  "第 7 章系統對照或配套基線改變",
+]
+
+[[records]]
+id = "ch07-binance-perpetual-funding-source"
+batch = "W1"
+document = "manuscript/chapters/07-perpetual-dual-wallet-funding.md"
+chapter = "永續合約、做多做空與兩個錢包"
+claim = "Binance 第一手資料將永續描述為無到期衍生品，說明正費率多方支付空方、負費率方向相反；USDⓈ-M 文件以 dualSidePosition=false／positionSide=BOTH 對應 One-way Mode，並分列 fundingRate、fundingTime、markPrice 與 fundingIntervalHours。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項查證官方 Academy 與開發者文件的產品概念、方向及 API 欄位，不下載或使用市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "Binance USDⓈ-M position mode: dualSidePosition／positionSide",
+  "Binance USDⓈ-M funding history: fundingRate／fundingTime／markPrice",
+  "Binance USDⓈ-M funding info: fundingIntervalHours",
+]
+interface_note = "以 Binance 官方公開文件查證產品與欄位語義；本章不呼叫私人帳戶、模式切換或交易端點。"
+evidence_refs = [
+  "url:https://www.binance.com/en/academy/articles/what-are-funding-rates-in-crypto-markets",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Change-Position-Mode",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-History",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-Info",
+]
+verification_commands = [
+  "web.open https://www.binance.com/en/academy/articles/what-are-funding-rates-in-crypto-markets；核對 updated date、無到期與正／負費率支付方向",
+  "web.open https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Change-Position-Mode；核對 dualSidePosition=false、One-way Mode 與 positionSide=BOTH",
+  "web.open https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-History；核對 fundingRate、fundingTime 與 markPrice",
+  "web.open https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-Info；核對 fundingIntervalHours",
+]
+executable = false
+executable_note = "不適用：第一手外部文件需連網並在發布前人工重新查證，不納入 deterministic book-check 的自動執行層。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Updated Jun 25, 2026",
+  "without an expiry date",
+  "positive",
+  "long positions pay",
+  "dualSidePosition",
+  "One-way Mode",
+  "positionSide",
+  "BOTH",
+  "fundingRate",
+  "fundingTime",
+  "markPrice",
+  "fundingIntervalHours",
+]
+result = "pass"
+observed = "2026-07-15 重新查證：Academy 頁面標示 Updated Jun 25, 2026，確認永續無到期與正／負費率方向；USDⓈ-M 官方文件確認 One-way Mode 欄位及逐筆 funding rate／time／mark price／interval 欄位。"
+known_differences = [
+  "官方外部文件與交易所規則可能改變；本筆只支持產品、方向與欄位語義，發布前仍須重新查證。",
+  "本筆不支持章內教學價格／費率、即時市場狀態、可成交性、帳戶模式、保證收益或任何交易決定。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Binance Academy 永續／資金費說明、USDⓈ-M position mode 或 funding 文件語義改變",
+  "第 7 章對產品、支付方向、結算欄位或間隔的敘述改變",
+  "發布前市場事實重新查證",
+]
