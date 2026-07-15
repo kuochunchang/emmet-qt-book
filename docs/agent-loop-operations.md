@@ -136,11 +136,24 @@ runner 版本健康，不能證明 workflow 正在前進。
 | `health=blocked` | 讀 `reason`／`attention`，修復 state、component 或 GitHub 讀取 |
 | `health=stalled` | iteration 結束但 workflow fingerprint 未變，推進已實質停住 |
 
-`health=stalled` 時，先到 `attention` 指定的 role pane 看最後輸出。若是 mutation
-被 approval／安全政策拒絕，保留 fail-closed 現場，由 dispatcher 核對 durable state；
-需要新授權時交由使用者明確處理後再讓 manager 重送，不能換命令或繞道執行。若是
-component／socket 錯誤，狀態會是 `health=blocked` 與
-`reason=delivery-failed`。單看反覆出現的 routing decision 不代表已送達或有進度。
+blocking 狀態第一次出現時，右下角會多一筆 `operator-alert`，並顯示簡短
+`LOOP ALERT [warning|critical]`；warning／critical 同時送 terminal bell。相同
+`alert_id` 持續時不重複響鈴或洗版；使用者設定的 pause 只顯示 notice、不響鈴。
+問題確實解除時會出現一次 `operator-resolved`／`LOOP RESOLVED`。目前沒有內建桌面、
+Email 或 Discord 通知；Meta Issue #1 才是需要跨終端保留的人類介入通知。
+
+`health=stalled` 時先到 `attention` 指定的 role pane 看最後輸出，但不要手動啟動
+下一輪。Manager 會為新的 no-progress alert 單獨喚醒一次 dispatcher；dispatcher 若能
+機械恢復，只做一個 canonical transaction。若不能安全恢復，它會保留 primary state、
+視情況加 `loop:blocked`，並在 Meta Issue #1 留含 alert ID、證據、解除條件與所需決定
+的去重留言。照該留言補足授權或外部條件後，讓 GitHub durable state 改變；後續 poll
+會自行輸出 resolved，不需要 restart loop，也不能換命令繞過 approval／安全政策。
+
+component／socket 錯誤會是 `health=blocked`、`reason=delivery-failed` 與 critical
+alert；依 `affected_role` 修復或重啟該 component，manager 下次 poll 會重送。
+`github-poll-failed` 則先修復 `gh` authentication／network。Event manager 不會
+自動 restart process、不自行移除 `loop:paused`。單看反覆出現的 routing decision
+不代表已送達或有進度。
 
 啟動成功會 attach session；在 tmux 按 `Ctrl-b d` 只會 detach，四個 component
 繼續運作。重新觀看：
