@@ -1,6 +1,6 @@
 ---
 name: emmet-loop-coder
-description: "Execute exactly one scoped coder iteration for the emmet-qt-book GitHub label loop. Use only when the user or a scheduled wake explicitly invokes $emmet-loop-coder to claim queued active-gate work, recover an interrupted coding task, or address changes requested on a loop PR; never invoke for unrelated coding."
+description: "Execute exactly one scoped coder iteration for the emmet-qt-book GitHub label loop. Use only when the user or the loop event manager explicitly invokes $emmet-loop-coder to claim queued active-gate work, recover an interrupted coding task, or address changes requested on a loop PR; never invoke for unrelated coding."
 ---
 
 # Emmet Loop Coder
