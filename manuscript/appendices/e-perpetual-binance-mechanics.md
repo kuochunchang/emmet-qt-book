@@ -1,9 +1,11 @@
 # E. 永續合約與 Binance 市場機制
 
-本附錄目前只收錄第 7 章直接需要的 U 本位線性永續、單向持倉、資金費與
-現貨／期貨雙錢包查表。最後查證日期為 2026-07-15。完整手算、驗收 oracle 與
-系統邊界見[第 7 章](../chapters/07-perpetual-dual-wallet-funding.md)；本頁不提供
-交易所帳戶設定或下單步驟。
+本附錄目前只收錄第 7–8 章直接需要的 U 本位線性永續、單向持倉、資金費、
+現貨／期貨雙錢包、價格角色、Cross／Isolated、分層保證金與強平邊界查表。
+最後查證日期為 2026-07-15。完整手算、驗收 oracle 與系統邊界見
+[第 7 章](../chapters/07-perpetual-dual-wallet-funding.md)與
+[第 8 章](../chapters/08-leverage-margin-liquidation.md)；本頁不提供交易所帳戶
+設定或下單步驟。
 
 所有費率、價格與結算時點都必須取自相符市場與時點的第一手資料。第 7 章的
 `0.0005` 是固定教學輸入，不是目前 Binance 費率、下一期預測或收益承諾。
@@ -76,11 +78,85 @@ E_futures = W_after + U
 `W_after` 已含資金費，因此不能再加一次。合約名義價值只是曝險規模，也不能加進
 權益。
 
+## 成交、指數與標記價格
+
+| 價格 | 官方／研究角色 | 不可偷換成 |
+|---|---|---|
+| 成交價格 | 實際撮合與已實現 PnL 的交易事實 | 強平風險重估價 |
+| 指數價格 | 多個現貨市場組合的參考 | 帳戶實際成交 |
+| 標記價格 | 公平參考；未實現 PnL、名義價值與強平判斷 | 保證可成交價格 |
+
+Binance 的
+[標記價格與指數價格 FAQ](https://www.binance.com/en/support/faq/detail/360033525071)
+於本次查證標示 2026-07-09 更新；USDⓈ-M 公開
+[Mark Price 端點](https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Mark-Price)
+也分列 `markPrice` 與 `indexPrice`。這只支持欄位與角色；任何即時值都必須在
+研究時重新取得並保存 exchange timestamp。
+
+## 槓桿、分層與保證金
+
+第 8 章對齊的最小公式為：
+
+```text
+notional = abs(signed_qty) × mark_price
+position initial margin target = abs(signed_qty) × entry_price / leverage
+maintenance margin = notional × MMR - maint amount
+margin balance = wallet balance + unrealized PnL
+margin ratio = maintenance margin / margin balance    （分母 > 0）
+```
+
+Binance 的
+[槓桿與保證金 FAQ](https://www.binance.com/en/support/faq/detail/360033162192)
+於本次查證標示 2026-03-27 更新，說明 initial margin 隨 leverage 改變，維持
+保證金則由 notional bracket、MMR 與 maint amount 決定。
+[開倉成本 FAQ](https://www.binance.com/en/support/faq/detail/87fa7ee33b574f7084d42bd2ce2e463b)
+另顯示訂單成本可包含 open loss；所以 Emmet 的 position target 不是完整交易所
+order cost。
+
+第 8 章使用 `v0.3.0` 的版本化 `BTCUSDT` bracket fixture：
+`snapshot_ts=1700000000000`，不是現行 Binance 帳戶規則。真實研究必須保存
+symbol、snapshot time、每檔 floor／cap、MMR、maint amount 與最大初始槓桿。
+
+## Cross 與 Isolated
+
+| 模式 | 可承擔資金 | 其他部位如何影響 |
+|---|---|---|
+| Cross | cross wallet balance 加所有 Cross 未實現 PnL | 其他部位的 PnL 與維持保證金都進風險邊界 |
+| Isolated | 指派給該部位的 isolated margin 加該部位 PnL | 不帶入其他部位 PnL／維持保證金 |
+
+Binance Academy 的
+[Cross／Isolated 說明](https://www.binance.com/en/academy/articles/what-are-isolated-margin-and-cross-margin-in-crypto-trading)
+於本次查證標示 2026-05-07 更新；USDⓈ-M 官方
+[變更保證金模式文件](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Change-Margin-Type)
+使用 `ISOLATED`／`CROSSED` 欄位。本文只核對名詞，不呼叫私人端點，也不表示
+`v0.3.0` 已提供讀者帳戶設定入口。
+
+## 強平邊界
+
+固定 bracket 下，Emmet `v0.3.0` 的單向持倉邊界為：
+
+```text
+p_liq =
+  (wallet - other MM + other UPNL + maint amount - signed_qty × entry)
+  / (abs(signed_qty) × MMR - signed_qty)
+```
+
+Isolated 以該部位 isolated margin 取代 wallet，other MM／UPNL 都為零。Binance
+[強平價格公式 FAQ](https://www.binance.com/en/support/faq/detail/b3c689c1f50a44cabb3a84e663b81d93)
+也分列 wallet balance、其他部位維持保證金與未實現 PnL；官方
+[Position Information V3](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Position-Information-V3)
+分列 `markPrice`、`liquidationPrice`、`isolatedMargin`、`notional`、
+`initialMargin` 與 `maintMargin`。
+
+`p_liq` 是模型風險邊界，不是保證成交價。缺少或過期 mark、分層超界、身分錯配、
+非正 margin balance 或非正候選價格都必須 fail closed；ADL、保險基金、下架與
+實際清算成交不由本附錄公式涵蓋。
+
 ## 使用邊界
 
 - 本頁不提供 API key、私人帳戶端點、模式切換、下單或自動劃轉操作。
-- 槓桿、Cross／Isolated、初始／維持保證金、強制平倉、ADL 與下架不在本附錄
-  目前範圍；不能從本頁公式推測其系統行為。
-- 基差、多腿對沖、策略收益圖與績效結論不在本附錄目前範圍。
+- 本頁只到第 8 章的槓桿、Cross／Isolated、初始／維持保證金與模型強平邊界；
+  ADL、保險基金、下架、多資產／Portfolio Margin 與完整交易所清算不在範圍。
+- 基差、多腿對沖、策略收益圖與績效結論留給第 9 章，不在本附錄目前範圍。
 - 外部文件與交易所規則可能改變；發布前必須重新查證第一手來源。
 - 本頁不提供會計、稅務或法律上的個別意見。

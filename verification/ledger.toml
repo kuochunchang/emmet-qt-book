@@ -847,3 +847,167 @@ revalidation_triggers = [
   "第 7 章對產品、支付方向、結算欄位或間隔的敘述改變",
   "發布前市場事實重新查證",
 ]
+
+[[records]]
+id = "ch08-decimal-leverage-margin-liquidation"
+batch = "W1"
+document = "manuscript/chapters/08-leverage-margin-liquidation.md"
+chapter = "槓桿、標記價格、保證金與強制平倉"
+claim = "以字串建立的 Decimal 固定案例可重現多空名義價值、初始／維持保證金、保證金餘額／比率、Cross／Isolated 強平邊界與非正餘額 fail-closed，並以未捨入強平價證明 MB=MM。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項只使用章內固定 Decimal 常數、版本化第一檔數字與明示的其他部位情境，不載入外部市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項是獨立手算與風險邊界 oracle，不呼叫 Emmet 正式產品入口或交易所端點。"
+evidence_refs = [
+  "book:manuscript/chapters/08-leverage-margin-liquidation.md",
+  "book:manuscript/appendices/b-trading-pnl-formulas.md",
+  "book:manuscript/appendices/c-performance-risk-metrics.md",
+  "book:manuscript/appendices/e-perpetual-binance-mechanics.md",
+]
+verification_commands = [
+  "uv run python -c 'from decimal import Decimal as D,getcontext; getcontext().prec=50; e=D(\"20000\"); q=D(\"0.5\"); r=D(\"0.004\"); lp=lambda x,w,omm=D(\"0\"),ou=D(\"0\"):(w-omm+ou-x*e)/(abs(x)*r-x); lo=lp(q,D(\"2000\")); sh=lp(-q,D(\"2000\")); assert lo.quantize(D(\"0.01\"))==D(\"16064.26\") and sh.quantize(D(\"0.01\"))==D(\"23904.38\"); assert abs((D(\"2000\")+(lo-e)*q)-q*lo*r)<D(\"1e-40\"); assert abs((D(\"2000\")+(sh-e)*(-q))-q*sh*r)<D(\"1e-40\"); assert lp(q,D(\"2000\"),D(\"20\"),D(\"500\"))<lo<lp(q,D(\"2000\"),D(\"20\"),D(\"-500\")); assert abs(q)*e/D(\"5\")==D(\"2000\") and abs(q)*e/D(\"10\")==D(\"1000\"); assert D(\"1000\")+(D(\"17600\")-e)*q<=0; print(\"long-short-liquidation=PASS\"); print(\"cross-isolated-boundary=PASS\"); print(\"leverage-exposure-separation=PASS\"); print(\"nonpositive-margin=PASS\")'",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "long-short-liquidation=PASS",
+  "cross-isolated-boundary=PASS",
+  "leverage-exposure-separation=PASS",
+  "nonpositive-margin=PASS",
+]
+result = "pass"
+observed = "多空強平價顯示值為 16064.26／23904.38 USDT/BTC，未捨入值皆滿足 MB=MM；其他 Cross 部位 +500／-500 UPNL 使多頭邊界移到 15100.40／17108.43；5x／10x target 為 2000／1000 USDT；非正餘額 oracle fail closed；四組標記皆 PASS。"
+known_differences = [
+  "所有價格、數量、保證金與其他部位 PnL 都是教學輸入，不是即時市場、帳戶或可成交事實。",
+  "固定案例不含費用、funding、跳空、成交深度、保險基金、ADL、下架、多資產或稅務。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "章內 Decimal 輸入、分層、強平公式、預期輸出或四組 oracle 改變",
+  "附錄 B／C／E 的保證金、強平、回撤或 risk-of-ruin 邊界改變",
+  "配套基線 tag、commit 或 bracket fixture 改變",
+]
+
+[[records]]
+id = "ch08-v030-margin-liquidation-model"
+batch = "W1"
+document = "manuscript/chapters/08-leverage-margin-liquidation.md"
+chapter = "槓桿、標記價格、保證金與強制平倉"
+claim = "v0.3.0 的 Position／FuturesWallet 以 entry、mark、signed quantity、leverage 與 margin type 計算曝險、初始保證金、MB 與 MR；版本化 bracket 計算 MM 與強平價，清算檢查對缺失／過期 mark、分層超界與非正餘額 fail closed。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：聚焦測試與版本化 BTCUSDT bracket fixture 都位於已發布配套 tag，不下載外部市場資料。"
+formal_entrypoints = []
+schemas = [
+  "quant.common.models.account.Position",
+  "quant.common.models.account.FuturesWallet",
+  "quant.common.rules.brackets.LeverageBracketTable",
+  "quant.common.rules.brackets.liquidation_price",
+  "quant.common.fill.liquidation.LiquidationChecker",
+]
+interface_note = "以已發布內部模型、分層、清算檢查與聚焦測試支撐概念對照；這些 package 路徑不是正式讀者交易、帳戶或報告入口。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:src/quant/common/models/account.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/liquidation.py",
+  "repo:emmet-qt-bt1:src/quant/common/rules/brackets.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/liquidation.py",
+  "repo:emmet-qt-bt1:tests/fixtures/exchange_rules/brackets/BTCUSDT.json",
+  "repo:emmet-qt-bt1:tests/unit/test_models_account.py",
+  "repo:emmet-qt-bt1:tests/unit/test_rules_brackets.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_liquidation_checker.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_liquidation.py",
+]
+verification_commands = [
+  "git grep -n -F 'return abs(self.signed_qty) * self.mark_price' HEAD -- src/quant/common/models/account.py",
+  "git grep -n -F 'return (self.mark_price - self.entry_price) * self.signed_qty' HEAD -- src/quant/common/models/account.py",
+  "git grep -n -F 'return notional * bracket.maint_margin_rate - bracket.maint_amount' HEAD -- src/quant/common/rules/brackets.py",
+  "git grep -n -F 'if margin_balance <= 0:' HEAD -- src/quant/common/models/account.py src/quant/common/fill/liquidation.py",
+  "uv lock --check",
+  "uv run pytest tests/unit/test_models_account.py tests/unit/test_rules_brackets.py tests/unit/test_fill_liquidation_checker.py tests/unit/test_engine_liquidation.py -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "return abs(self.signed_qty) * self.mark_price",
+  "return (self.mark_price - self.entry_price) * self.signed_qty",
+  "return notional * bracket.maint_margin_rate - bracket.maint_amount",
+  "if margin_balance <= 0:",
+  "Resolved 45 packages",
+  "83 passed",
+]
+result = "pass"
+observed = "精確曝險、PnL、維持保證金與非正餘額保護均存在；lockfile 檢查通過，四個指定聚焦測試共 83 passed。fixture 第一檔為 [0,50000)、MMR 0.004、maint amount 0；本章候選強平價仍在該檔。"
+known_differences = [
+  "v0.3.0 發布的是內部模型、分層與風險檢查證據；尚無正式讀者交易、帳戶或報告入口。",
+  "強平價按當前 mark notional 選檔且不做候選價 fixed-point 迭代；它是模型近似，不是交易所最終清算帳單。",
+  "版本化 fixture snapshot_ts=1700000000000，不代表 2026-07-15 Binance 現行 bracket。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Position、FuturesWallet、LeverageBracketTable、liquidation_price 或 LiquidationChecker 語義改變",
+  "BTCUSDT bracket fixture、聚焦測試名稱、行為或預期通過數量改變",
+  "第 8 章系統對照或配套基線改變",
+]
+
+[[records]]
+id = "ch08-binance-price-margin-liquidation-source"
+batch = "W1"
+document = "manuscript/chapters/08-leverage-margin-liquidation.md"
+chapter = "槓桿、標記價格、保證金與強制平倉"
+claim = "Binance 第一手資料分開標記／指數／成交價格角色，說明初始保證金隨槓桿、維持保證金依 notional bracket／MMR／maint amount，並區分 Cross／Isolated 及強平公式中的其他部位維持保證金與未實現 PnL。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項只查證 Binance 官方公開文件的產品概念、公式與欄位，不下載或使用市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "Binance mark／index price roles",
+  "Binance leverage bracket: notional／MMR／maintenance amount",
+  "Binance margin type: ISOLATED／CROSSED",
+  "Binance position fields: markPrice／liquidationPrice／isolatedMargin／notional／initialMargin／maintMargin",
+]
+interface_note = "以 Binance 官方公開 FAQ、Academy 與開發者文件查證概念與欄位；本章不呼叫私人帳戶、模式切換或交易端點。"
+evidence_refs = [
+  "url:https://www.binance.com/en/support/faq/detail/360033525071",
+  "url:https://www.binance.com/en/support/faq/detail/360033162192",
+  "url:https://www.binance.com/en/support/faq/detail/b3c689c1f50a44cabb3a84e663b81d93",
+  "url:https://www.binance.com/en/support/faq/detail/87fa7ee33b574f7084d42bd2ce2e463b",
+  "url:https://www.binance.com/en/academy/articles/what-are-isolated-margin-and-cross-margin-in-crypto-trading",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Mark-Price",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Change-Margin-Type",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Position-Information-V3",
+]
+verification_commands = [
+  "web.open Binance mark/index FAQ；核對 index／mark／execution 角色與 updated date",
+  "web.open Binance leverage/margin、liquidation formula、open cost FAQ；核對 IM、MM、bracket、maint amount、other MM／UPNL 與 open loss",
+  "web.open Binance Cross/Isolated Academy；核對 shared collateral／ring-fenced collateral 與 updated date",
+  "web.open Binance USDⓈ-M Mark Price、Change Margin Type、Position Information V3；核對公開欄位與 ISOLATED／CROSSED 名詞",
+]
+executable = false
+executable_note = "不適用：第一手外部文件需連網並在發布前人工重新查證，不納入 deterministic book-check 的自動執行層。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Updated Jul 9, 2026",
+  "Updated Mar 27, 2026",
+  "Updated May 7, 2026",
+  "markPrice",
+  "indexPrice",
+  "maintenance amount",
+  "ISOLATED",
+  "CROSSED",
+  "liquidationPrice",
+  "maintMargin",
+]
+result = "pass"
+observed = "2026-07-15 重新查證：官方 FAQ／Academy 支持價格角色、initial／maintenance margin、bracket、Cross／Isolated 與強平輸入；開發者文件分列 markPrice／indexPrice、marginType 與 position 風險欄位。未採用任何即時價格、帳戶 bracket 或範例數字作市場現況。"
+known_differences = [
+  "官方外部文件與交易所規則可能改變；本筆只支持產品、公式與欄位語義，發布前仍須重新查證。",
+  "本筆不支持章內固定價格／分層、即時市場狀態、可成交性、帳戶設定、保證收益或交易決定。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Binance 標記／指數、槓桿／保證金、Cross／Isolated、強平或 position 文件語義改變",
+  "第 8 章對價格角色、公式、欄位或外部事實的敘述改變",
+  "發布前市場事實重新查證",
+]
