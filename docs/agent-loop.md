@@ -270,17 +270,38 @@ Codex。
 | `blocked` | `true` | state invariant、同時 busy、delivery 或 GitHub polling 有錯 |
 | `stalled` | `true` | owner iteration 已完成，但 durable workflow state 沒前進 |
 
-Agent 完成 iteration 時只把 event ID、exit code 與完成時間寫入既有 role lock
-metadata。Manager 以 delivery 當下和下一次 poll 的 workflow fingerprint 比較 label、
-Issue／PR 配對與 PR head／base 等 routing-bearing state；一般留言造成的
+Agent 完成 iteration 時把最近四筆 event ID、reason、exit code 與完成時間寫入既有
+role lock metadata。Manager 以 delivery 當下和下一次 poll 的 workflow fingerprint
+比較 label、Issue／PR 配對與 PR head／base 等 routing-bearing state；一般留言造成的
 `updatedAt` 不算進度。相同 owner／reason 的 iteration 已完成而 fingerprint 不變時，
 輸出 `reason=no-durable-progress-after-iteration`，即使 child exit code 是 `0` 仍
-判為 `health=stalled`。這能揭露 safety denial 或 no-op 被 ACK／retry window 暫時
-遮住的情形。
+判為 `health=stalled`。後續 dispatcher 告警輪不會覆蓋這筆 canonical completion，
+因此 safety denial 或 no-op 不會被 ACK／retry window 暫時遮住。
 
-`operator-status` 是唯讀、非 durable 的操作者診斷；它不改 label、不縮短 retry、
-不授權繞過 approval，也不能取代 GitHub reconciliation。Manager 重啟後，本機 delivery
-歷史可以消失；下一個 role iteration 仍須以 GitHub durable state 恢復。
+blocking 狀態第一次出現時，manager 另輸出 `result=operator-alert`；欄位包含穩定
+`alert_id`、`severity`、`blocker`、`affected_role`、`current`、`next`、
+`attention` 與 `requires_user`。Alert ID 只由 blocker、workflow fingerprint、
+affected role 與 object state 形成；同一問題持續時不重複輸出。warning／critical
+第一次出現時另向 stderr 寫簡短 `LOOP ALERT` 並送 terminal bell；使用者刻意設定的
+pause 是 notice、不響鈴。問題確實因 workflow state 改變或 infrastructure 恢復而消失
+時，輸出一次 `result=operator-resolved`；同 fingerprint 的 dispatcher iteration
+執行期間保留原 alert，不把 `health=running` 誤當恢復。
+
+新的 `no-durable-progress-after-iteration` alert 會取代原 owner retry，單獨送一次
+`reason=operator-stall-reconciliation` 給 dispatcher。這次 alert delivery 與
+canonical owner delivery 分開記錄，只有 ACK 後才視為已 escalation；失敗則維持
+critical delivery alert 並於後續 poll 重試。Agent 把 event 的有限欄位附在 one-shot
+Codex prompt，明示為資料而非指令；role 仍須重讀 GitHub live state。Dispatcher 能
+機械恢復時只做一個 canonical transaction；不能安全恢復時保留 primary state、視情況
+加 `loop:blocked`，並在 Meta Issue #1 留含
+`emmet-loop:dispatcher:alert:id=<ALERT_ID>:main=<MAIN_SHA>` marker 的單一 durable
+通知，列出證據、解除條件與需要的使用者決定。
+
+`operator-status` 本身仍是唯讀、非 durable 的操作者診斷；alert policy 只多喚醒既有
+dispatcher，不啟動第四個 agent，不自動 restart component、不移除 pause，也不授權
+繞過 approval。Manager 重啟後，本機 delivery、active-alert 與去重歷史可以消失，
+所以可能重新告警；下一個 role iteration 仍須以 GitHub durable state 與 marker 冪等
+恢復。
 
 ### Trusted runners 與啟動
 

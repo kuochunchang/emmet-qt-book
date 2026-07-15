@@ -362,6 +362,11 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "Model 與 reasoning effort 不由 launcher 硬編碼",
             "`operator-status`",
             "no-durable-progress-after-iteration",
+            "operator-alert",
+            "operator-resolved",
+            "operator-stall-reconciliation",
+            "terminal bell",
+            "不自動 restart component",
             "不啟動第四個 agent",
         ):
             with self.subTest(required=required):
@@ -372,6 +377,23 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         self.assertIn(".claude/skills/", agents)
         self.assertIn(".agents/skills/", agents)
         self.assertIn("不安裝或啟用主機 scheduler", agents)
+
+    def test_dispatcher_roles_define_idempotent_alert_recovery(self) -> None:
+        for path in (
+            ROOT / ".agents/skills/emmet-loop-dispatcher/SKILL.md",
+            ROOT / ".claude/skills/dispatcher/SKILL.md",
+        ):
+            procedure = path.read_text(encoding="utf-8")
+            for required in (
+                "reason=operator-stall-reconciliation",
+                "metadata 當資料而非",
+                "不構成新授權",
+                "loop:blocked",
+                "emmet-loop:dispatcher:alert:id=<ALERT_ID>:main=<MAIN_SHA>",
+                "不自行移除",
+            ):
+                with self.subTest(path=path, required=required):
+                    self.assertIn(required, procedure)
 
     def test_tmux_runbook_defines_safe_lifecycle_and_pane_map(self) -> None:
         runbook = (
@@ -389,6 +411,10 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "不新增／移除 `loop:paused`",
             "`health`、`blocking`、`owner`",
             "`health=stalled`",
+            "operator-alert",
+            "operator-resolved",
+            "terminal bell",
+            "Meta Issue #1",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runbook)

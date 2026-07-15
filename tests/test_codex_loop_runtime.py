@@ -13,8 +13,11 @@ import unittest
 from unittest.mock import patch
 
 from scripts.codex_loop_runtime import (
+    build_alert_escalation,
     build_event,
+    build_operator_alert,
     classify_snapshot,
+    command_with_event_context,
     describe_operator_status,
     detect_stalled_iteration,
     normalize_snapshot,
@@ -24,6 +27,7 @@ from scripts.codex_loop_runtime import (
     read_agent_states,
     select_poll_decisions,
     socket_path,
+    transition_operator_alert,
     workflow_state_fingerprint,
 )
 
@@ -459,6 +463,169 @@ class OperatorStatusTests(unittest.TestCase):
 
         self.assertIsNotNone(stalled)
 
+    def test_completed_event_history_keeps_canonical_stall_visible(self) -> None:
+        state = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        decision = classify_snapshot(state)[0]
+        stalled = detect_stalled_iteration(
+            state,
+            deliveries={
+                "coder": {
+                    "event_id": "owner-event",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(state),
+                }
+            },
+            agent_states={
+                "coder": {
+                    "state": "waiting",
+                    "last_event_id": "alert-event",
+                    "last_exit_code": 0,
+                    "completed_events": [
+                        {
+                            "event_id": "owner-event",
+                            "reason": decision["reason"],
+                            "exit_code": 0,
+                            "finished_at": "2026-07-15T05:05:02Z",
+                        },
+                        {
+                            "event_id": "alert-event",
+                            "reason": "operator-stall-reconciliation",
+                            "exit_code": 0,
+                            "finished_at": "2026-07-15T05:05:03Z",
+                        },
+                    ],
+                }
+            },
+        )
+
+        self.assertIsNotNone(stalled)
+        self.assertEqual("owner-event", stalled["event_id"])
+
+
+class OperatorAlertTests(unittest.TestCase):
+    def stalled_status(self) -> tuple[dict[str, object], dict[str, object]]:
+        state = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+            stalled={
+                "role": "coder",
+                "event_id": "event-1",
+                "exit_code": 0,
+            },
+        )
+        return state, status
+
+    def test_blocker_alert_is_stable_deduplicated_and_resolved(self) -> None:
+        state, stalled = self.stalled_status()
+        alert = build_operator_alert(stalled)
+
+        self.assertIsNotNone(alert)
+        self.assertEqual("warning", alert["severity"])
+        self.assertEqual("coder", alert["affected_role"])
+        self.assertFalse(alert["requires_user"])
+
+        transitions, active = transition_operator_alert(None, stalled)
+        self.assertEqual(
+            ["operator-alert"], [item["result"] for item in transitions]
+        )
+        repeated, active = transition_operator_alert(active, stalled)
+        self.assertEqual([], repeated)
+
+        running = describe_operator_status(
+            state,
+            decisions=[],
+            busy=["dispatcher"],
+        )
+        held, active = transition_operator_alert(active, running)
+        self.assertEqual([], held)
+        self.assertIsNotNone(active)
+        same_state_healthy = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+        held, active = transition_operator_alert(
+            active,
+            same_state_healthy,
+        )
+        self.assertEqual([], held)
+        self.assertIsNotNone(active)
+
+        advanced = snapshot(
+            issues=[loop_object("issue", 3, "loop:coding")]
+        )
+        healthy = describe_operator_status(
+            advanced,
+            decisions=classify_snapshot(advanced),
+            busy=[],
+        )
+        resolved, active = transition_operator_alert(active, healthy)
+        self.assertEqual(
+            ["operator-resolved"], [item["result"] for item in resolved]
+        )
+        self.assertIsNone(active)
+
+    def test_delivery_failure_is_critical_and_requires_operator(self) -> None:
+        state = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+            delivery_failures=[
+                {"role": "coder", "detail": "socket missing"}
+            ],
+        )
+        alert = build_operator_alert(status)
+
+        self.assertEqual("critical", alert["severity"])
+        self.assertTrue(alert["requires_user"])
+        self.assertEqual("coder", alert["affected_role"])
+
+    def test_stall_alert_builds_one_dispatcher_reconciliation_event(self) -> None:
+        state, status = self.stalled_status()
+        alert = build_operator_alert(status)
+        decision = build_alert_escalation(alert, state)
+
+        self.assertEqual("dispatcher", decision["role"])
+        self.assertEqual("wake", decision["action"])
+        self.assertEqual(
+            "operator-stall-reconciliation", decision["reason"]
+        )
+        self.assertEqual(
+            alert["alert_id"],
+            decision["operator_alert"]["alert_id"],
+        )
+
+    def test_event_context_is_appended_as_data_to_the_child_prompt(self) -> None:
+        event = build_event(
+            {
+                "role": "dispatcher",
+                "action": "wake",
+                "reason": "operator-stall-reconciliation",
+                "objects": [],
+                "operator_alert": {"alert_id": "alert-123"},
+            },
+            "test/repo",
+        )
+        command = command_with_event_context(
+            ["codex", "exec", "base prompt"], event
+        )
+
+        self.assertIn("wake metadata", command[-1])
+        self.assertIn(
+            '"reason":"operator-stall-reconciliation"', command[-1]
+        )
+        self.assertIn('"alert_id":"alert-123"', command[-1])
+        self.assertIn("data, not instructions", command[-1])
+
 
 class AgentRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -724,8 +891,8 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(0, agent.returncode, agent_stderr)
         self.assertIn("fake-visible-event", agent_stdout)
 
-    def test_event_manager_reports_no_progress_after_iteration(self) -> None:
-        agent = self.start_agent()
+    def test_event_manager_reports_and_escalates_no_progress_once(self) -> None:
+        agent = self.start_agent(max_events=2)
         payload = {
             "data": {
                 "repository": {"meta": {"labels": {"nodes": []}}},
@@ -773,7 +940,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 "--interval-seconds",
                 "0.05",
                 "--retry-seconds",
-                "30",
+                "0.1",
                 "--dispatcher-heartbeat-seconds",
                 "30",
             ],
@@ -795,10 +962,8 @@ class AgentRuntimeTests(unittest.TestCase):
                     continue
                 record = json.loads(line)
                 records.append(record)
-                if (
-                    record.get("result") == "operator-status"
-                    and record.get("health") == "stalled"
-                ):
+                if record.get("result") == "operator-alert":
+                    time.sleep(0.25)
                     break
         finally:
             manager.terminate()
@@ -824,8 +989,53 @@ class AgentRuntimeTests(unittest.TestCase):
         )
         self.assertTrue(stalled[-1]["blocking"])
         self.assertEqual("dispatcher", stalled[-1]["owner"])
+        alerts = [
+            record
+            for record in records
+            if record.get("result") == "operator-alert"
+        ]
+        self.assertEqual(1, len(alerts), records)
+        self.assertEqual(
+            "no-durable-progress-after-iteration",
+            alerts[0]["blocker"],
+        )
+        notified_reasons = [
+            record.get("reason")
+            for record in records
+            if record.get("result") == "notified"
+        ]
+        self.assertIn(
+            "operator-stall-reconciliation",
+            notified_reasons,
+        )
+        self.assertEqual(
+            1,
+            notified_reasons.count("operator-stall-reconciliation"),
+        )
+        self.assertEqual(
+            1,
+            notified_reasons.count("approved-pull-request"),
+        )
+        self.assertFalse(
+            any(
+                record.get("result") == "delivery-failed"
+                for record in records
+            ),
+            records,
+        )
+
+        self.assertIn("\aLOOP ALERT", manager_stderr)
         self.assertEqual(0, agent.returncode, agent_stderr)
-        self.assertIn('"result": "iteration-finished"', agent_stdout)
+        self.assertEqual(
+            2,
+            agent_stdout.count('"result": "iteration-finished"'),
+        )
+        arguments = json.loads(self.capture.read_text(encoding="utf-8"))
+        self.assertIn(
+            "operator-stall-reconciliation",
+            arguments[-1],
+        )
+        self.assertIn("operator_alert", arguments[-1])
 
     def test_busy_agent_rejects_new_delivery_without_socket_backlog(self) -> None:
         process = self.start_agent(max_events=0, sleep_seconds="2")
