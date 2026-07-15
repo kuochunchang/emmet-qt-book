@@ -1,8 +1,9 @@
 # D. 市場微結構
 
-本附錄目前只收錄[第 6 章](../chapters/06-costs-breakeven.md)直接需要的 bid／ask、
-spread、maker／taker、滑點、流動性與容量最小概念。訂單簿排隊、部分成交、市場
-衝擊，以及 bar、aggTrades、tick、order-book 模型的完整資訊差異，會隨對應 active
+本附錄目前只收錄[第 6 章](../chapters/06-costs-breakeven.md)與
+[第 9 章](../chapters/09-two-strategy-risk-maps.md)直接需要的 bid／ask、spread、
+maker／taker、滑點、流動性、容量、多腿不同步與網格庫存風險最小概念。訂單簿
+排隊、部分成交、市場衝擊，以及 bar、aggTrades、tick、order-book 模型的完整資訊差異，會隨對應 active
 正文補寫。
 
 正文的成本雙扣防線與 no-go 判斷必須自足；本頁只作語義與證據邊界查表。
@@ -84,6 +85,26 @@ scenario_depth × participation_cap
 先 no-go，避免把缺少的成交證據補成樂觀假設。要把它升級成真實容量結論，至少
 需要版本化深度資料、規模階梯、成交模型、成本敏感度與失效條件。
 
+## 多腿不同步：數量相等也可能只是一張計畫
+
+期現兩張委託分屬不同市場。`Q_spot + Q_perp = 0` 必須使用實際成交後的帶方向
+數量與相符時間，不能使用 intended quantity。至少分開保存每腿 order intent、
+ack、fill quantity／price／time、fee、終態、殘留 `Q_net` 與當時深度。
+
+一腿成交而另一腿尚未完成時，basis 與共同方向曝險都可能改變。`v0.3.0` 尚未
+發布 Phase 4 多腿協調入口；第 9 章只留下固定失衡 oracle。
+
+## 網格庫存與剩餘掛單
+
+網格 LIMIT／maker 意圖只有在 fill 後才改變 inventory、平均成本、wallet 與
+realized PnL。未成交掛單不可以先記收益，但也不能從風險報告消失：
+
+- 下跌時多張買單可能依序成交，使同方向庫存與保證金需求一起增加；
+- 價格跳過格位、深度不足或排隊落後時，預期賣單可能沒有成交；
+- 已完成循環勝率不含 open inventory 的 unrealized PnL；
+- worst-open-order exposure 應假設同方向掛單成交，重算 inventory、費用、權益、
+  margin 與 liquidation 緩衝。
+
 ## 第一手來源與固定邊界
 
 本 slice 固定查閱 Binance 官方 Spot API 文件 commit
@@ -102,4 +123,5 @@ scenario_depth × participation_cap
 - maker 意圖、限價與 post-only 都不構成成交保證。
 - bar volume cap 不是即時深度，單一 snapshot 也不是容量證明。
 - 實際成交若優於參考價，應保存 price improvement 的方向，不能用絕對值改寫。
-- 部分成交、撤單、訂單生命週期與更完整撮合假設留待後續 active gate。
+- 本頁只補足第 9 章判讀所需的部分成交／撤單風險語義；完整訂單生命週期與撮合
+  假設仍留待後續 active gate。

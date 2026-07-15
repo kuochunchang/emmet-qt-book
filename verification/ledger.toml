@@ -1011,3 +1011,165 @@ revalidation_triggers = [
   "第 8 章對價格角色、公式、欄位或外部事實的敘述改變",
   "發布前市場事實重新查證",
 ]
+
+[[records]]
+id = "ch09-decimal-two-strategy-risk-maps"
+batch = "W1"
+document = "manuscript/chapters/09-two-strategy-risk-maps.md"
+chapter = "兩個訓練案例：中性不等於無風險，網格不等於穩定"
+claim = "字串建立的 Decimal 固定案例可重現期現兩腿基差／淨敞口／成本／funding 與永續網格 inventory／average entry／realized／unrealized／equity／剩餘掛單壓力，並與兩張收益來源／失效條件圖一致。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：只使用章內固定 Decimal 常數、成交序列與 repository 內 SVG，不載入外部市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項是獨立手算、風險圖與決定 oracle，不呼叫 Emmet 產品入口或交易所端點。"
+evidence_refs = [
+  "book:manuscript/chapters/09-two-strategy-risk-maps.md",
+  "book:manuscript/appendices/b-trading-pnl-formulas.md",
+  "book:manuscript/appendices/d-market-microstructure.md",
+  "book:manuscript/appendices/e-perpetual-binance-mechanics.md",
+  "book:manuscript/assets/ch09-cash-and-carry-risk-map.svg",
+  "book:manuscript/assets/ch09-perpetual-grid-risk-map.svg",
+]
+verification_commands = [
+  "uv run python -c 'from decimal import Decimal as D; q=D(\"0.1\"); gross=(D(\"20400\")-D(\"20000\"))*q+(D(\"20450\")-D(\"20200\"))*(-q); fill=(D(\"20390\")-D(\"20010\"))*q+(D(\"20465\")-D(\"20185\"))*(-q); sf=(D(\"20010\")+D(\"20390\"))*q*D(\"0.001\"); pf=(D(\"20185\")+D(\"20465\"))*q*D(\"0.0004\"); funding=-(-q)*D(\"20200\")*D(\"0.0005\"); assert gross==D(\"15\") and fill+funding-sf-pf==D(\"5.344000\"); assert (D(\"200\")-D(\"400\"))*q+funding-(gross-fill)-sf-pf==D(\"-29.656000\"); assert fill-(-q)*D(\"20200\")*D(\"-0.003\")-sf-pf==D(\"-1.72600\"); fees=sum((D(p)*D(\"0.01\")*D(\"0.0004\") for p in (\"20000\",\"20200\",\"20000\",\"20200\",\"19800\",\"19600\",\"19400\")),D(\"0\")); avg=(D(\"19800\")+D(\"19600\")+D(\"19400\"))/D(\"3\"); wallet=D(\"1000\")+D(\"4\")-fees; equity=wallet+(D(\"18000\")-avg)*D(\"0.03\"); assert fees==D(\"0.5568\") and avg==D(\"19600\") and equity==D(\"955.4432\"); stressed=wallet-D(\"0.1528\")+(D(\"18000\")-D(\"19400\"))*D(\"0.05\"); assert stressed==D(\"933.2904\"); print(\"basis-ledger=PASS\"); print(\"basis-scenarios=PASS\"); print(\"grid-range=PASS\"); print(\"grid-trend=PASS\"); print(\"remaining-orders=PASS\")'",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "basis-ledger=PASS",
+  "basis-scenarios=PASS",
+  "grid-range=PASS",
+  "grid-trend=PASS",
+  "remaining-orders=PASS",
+]
+result = "pass"
+observed = "期現完整對沖的 reference gross／net 為 15／5.344000 USDT；部分成交 Q_net=0.04 BTC、基差擴大 net=-29.656000、費率反轉 net=-1.72600；網格完成 2/2 wins 後，0.03 BTC 庫存在 mark 18000 的 equity=955.4432，剩餘買單全成交通過 stressed equity=933.2904；五組 PASS。兩張 SVG XML 可解析。"
+known_differences = [
+  "價格、費率、成交序列、深度與決定門檻都是教學輸入，不是即時市場、帳戶、容量或績效事實。",
+  "固定情境不含真實排隊、完整 order book、市場衝擊、ADL、下架、保險基金、多資產模式或稅務。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "章內 Decimal 輸入、公式、表格、PASS markers、兩張 SVG 或 continue／reduce／no-go 路徑改變",
+  "附錄 B／D／E 的基差、淨敞口、網格帳本或產品邊界改變",
+  "配套基線 tag／commit 或 Chapter 9 內容狀態改變",
+]
+
+[[records]]
+id = "ch09-v030-accounting-funding-boundaries"
+batch = "W1"
+document = "manuscript/chapters/09-two-strategy-risk-maps.md"
+chapter = "兩個訓練案例：中性不等於無風險，網格不等於穩定"
+claim = "v0.3.0 的 Position／FuturesWallet／AccountState 與 AccountingLedger 支持 signed quantity、mark PnL、加減倉平均成本、realized minus fee、雙錢包與 funding posting 核對；strategy_api 仍只有 package shell，未發布多腿協調或網格策略入口。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：聚焦測試與原始碼都位於已發布配套 tag，不下載外部市場資料。"
+formal_entrypoints = []
+schemas = [
+  "quant.common.models.account.Position",
+  "quant.common.models.account.FuturesWallet",
+  "quant.common.models.account.AccountState",
+  "quant.common.engine.accounting.AccountingLedger",
+  "quant.common.fill.funding.FundingPosting",
+]
+interface_note = "以已發布內部模型、會計與聚焦測試支撐概念對照；這些 package 路徑不是正式期現／網格策略、交易或報告入口。"
+evidence_refs = [
+  "repo:emmet-qt-bt1:src/quant/common/models/account.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/accounting.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/funding.py",
+  "repo:emmet-qt-bt1:src/quant/strategy_api/__init__.py",
+  "repo:emmet-qt-bt1:tests/unit/test_models_account.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_accounting.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_funding.py",
+]
+verification_commands = [
+  "git grep -n -F 'return (self.mark_price - self.entry_price) * self.signed_qty' HEAD -- src/quant/common/models/account.py",
+  "git grep -n -F 'wallet = self._futures_wallet_balance + realized - decision.fee' HEAD -- src/quant/common/engine/accounting.py",
+  "git grep -n -F 'expected_cash_flow = -signed_qty * posting.mark_price * posting.rate' HEAD -- src/quant/common/engine/accounting.py",
+  "test \"$(git ls-tree -r --name-only HEAD -- src/quant/strategy_api)\" = \"src/quant/strategy_api/__init__.py\"",
+  "git show HEAD:src/quant/strategy_api/__init__.py",
+  "uv lock --check",
+  "uv run pytest tests/unit/test_models_account.py tests/unit/test_engine_accounting.py tests/unit/test_engine_funding.py -q",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "return (self.mark_price - self.entry_price) * self.signed_qty",
+  "wallet = self._futures_wallet_balance + realized - decision.fee",
+  "expected_cash_flow = -signed_qty * posting.mark_price * posting.rate",
+  "# quant.strategy_api module",
+  "Resolved 45 packages",
+  "90 passed",
+]
+result = "pass"
+observed = "固定 HEAD 與 tag 均為 c999965e5cc923281541409cda9502beb93b8a60，工作樹乾淨；三個精確會計／funding 來源 oracle 存在，strategy_api 完整 tree 仍只有 __init__.py；lock check 通過，三個聚焦測試檔共 90 passed。"
+known_differences = [
+  "v0.3.0 發布的是內部模型與帳本證據，沒有正式讀者期現／網格策略、組合風控、交易或報告入口。",
+  "固定測試不證明真實兩市場可同步成交、未來 funding、容量、策略績效或交易所最終清算。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Position、FuturesWallet、AccountState、AccountingLedger 或 FundingPosting 語義改變",
+  "strategy_api tree、Phase 4 發布狀態、聚焦測試名稱、行為或預期通過數量改變",
+  "第 9 章系統對照或配套基線改變",
+]
+
+[[records]]
+id = "ch09-binance-funding-mark-limit-maker-source"
+batch = "W1"
+document = "manuscript/chapters/09-two-strategy-risk-maps.md"
+chapter = "兩個訓練案例：中性不等於無風險，網格不等於穩定"
+claim = "Binance 第一手公開資料分列 fundingRate／fundingTime／markPrice、fundingIntervalHours 及 markPrice／indexPrice／lastFundingRate／nextFundingTime；固定 Spot 文件把 LIMIT_MAKER 定義為若立即以 taker 成交就拒絕，支持本章時點與未成交邊界。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：只查證官方公開欄位與產品語義，不保存或使用即時回應數值作資料集。"
+formal_entrypoints = []
+schemas = [
+  "Binance funding history: symbol／fundingRate／fundingTime／markPrice",
+  "Binance funding info: fundingIntervalHours／adjustedFundingRateCap／adjustedFundingRateFloor",
+  "Binance premium index: markPrice／indexPrice／lastFundingRate／nextFundingTime",
+  "Binance Spot LIMIT_MAKER／bids／asks／maker／taker",
+]
+interface_note = "以 Binance 官方公開文件與無憑證市場資料端點查證欄位；本章不呼叫私人帳戶、下單、模式切換或 transfer 端點。"
+evidence_refs = [
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-History",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-Info",
+  "url:https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Mark-Price",
+  "url:https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1",
+  "url:https://fapi.binance.com/fapi/v1/fundingInfo",
+  "url:https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+  "url:https://github.com/binance/binance-spot-api-docs/blob/4987e707f84f20d736ee6a2bcb71396111cffee1/rest-api.md",
+]
+verification_commands = [
+  "curl -fsSL 'https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1'；核對 symbol／fundingRate／fundingTime／markPrice",
+  "curl -fsSL 'https://fapi.binance.com/fapi/v1/fundingInfo'；核對 fundingIntervalHours／adjustedFundingRateCap／adjustedFundingRateFloor",
+  "curl -fsSL 'https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT'；核對 markPrice／indexPrice／lastFundingRate／nextFundingTime",
+  "gh api repos/binance/binance-spot-api-docs/contents/rest-api.md?ref=4987e707f84f20d736ee6a2bcb71396111cffee1；核對 bids／asks／LIMIT_MAKER／maker／taker",
+]
+executable = false
+executable_note = "不適用：第一手公開端點與文件需要連網、回應會隨時間改變，發布前須人工重新查證，不納入 deterministic book-check 自動執行。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "fundingRate",
+  "fundingTime",
+  "markPrice",
+  "fundingIntervalHours",
+  "indexPrice",
+  "lastFundingRate",
+  "nextFundingTime",
+  "LIMIT_MAKER",
+]
+result = "pass"
+observed = "2026-07-15 重新查證：三個 USDⓈ-M 公開端點回應包含本章採用的 funding／mark／index／interval 欄位；固定 Spot 文件 commit 包含 bids／asks、maker／taker 與 LIMIT_MAKER 拒絕立即 taker 成交的語義。未採用回應價格、費率或範例深度作教學輸入。"
+known_differences = [
+  "官方端點、文件與交易所規則可能改變；本筆只支持欄位與意圖／成交邊界，發布前仍須重驗。",
+  "本筆不支持章內固定價格／費率、即時容量、可成交性、帳戶設定、策略績效或交易決定。",
+]
+verified_on = "2026-07-15"
+revalidation_triggers = [
+  "Binance funding history／info、premium index 或 Spot LIMIT_MAKER／order-book／commission 語義改變",
+  "第 9 章對 funding、mark／index、maker／LIMIT 或時點欄位的敘述改變",
+  "發布前市場事實重新查證",
+]

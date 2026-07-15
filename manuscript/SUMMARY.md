@@ -16,7 +16,7 @@
 - [成本決定策略能不能活下來](chapters/06-costs-breakeven.md)
 - [永續合約、做多做空與兩個錢包](chapters/07-perpetual-dual-wallet-funding.md)
 - [槓桿、標記價格、保證金與強制平倉](chapters/08-leverage-margin-liquidation.md)
-- [兩個訓練案例：中性不等於無風險，網格不等於穩定]()
+- [兩個訓練案例：中性不等於無風險，網格不等於穩定](chapters/09-two-strategy-risk-maps.md)
 
 # 第三篇　沒有可信資料，就沒有可信結論
 
