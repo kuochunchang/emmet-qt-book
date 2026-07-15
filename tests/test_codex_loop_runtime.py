@@ -10,12 +10,14 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest.mock import patch
 
 from scripts.codex_loop_runtime import (
     build_event,
     classify_snapshot,
     normalize_snapshot,
     notify_agent,
+    poll_github,
     pull_request_disappeared,
     select_poll_decisions,
     socket_path,
@@ -151,6 +153,38 @@ class EventRoutingTests(unittest.TestCase):
         normalized = normalize_snapshot(payload)
         self.assertTrue(normalized["paused"])
         self.assertEqual([3], [item["number"] for item in normalized["issues"]])
+
+    def test_github_poll_uses_supported_multi_label_or_qualifier(self) -> None:
+        payload = {
+            "data": {
+                "repository": {"meta": {"labels": {"nodes": []}}},
+                "loopObjects": {"nodes": []},
+            }
+        }
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+
+        with patch(
+            "scripts.codex_loop_runtime.subprocess.run",
+            return_value=completed,
+        ) as run:
+            poll_github("gh", Path("/tmp"), "test/repo")
+
+        command = run.call_args.args[0]
+        search_argument = next(
+            argument for argument in command if argument.startswith("search=")
+        )
+        self.assertEqual(
+            "search=repo:test/repo is:open "
+            'label:"loop:approved","loop:blocked",'
+            '"loop:changes-requested","loop:coding",'
+            '"loop:needs-review","loop:queued"',
+            search_argument,
+        )
 
     def test_busy_child_serializes_regular_role_wakes(self) -> None:
         decisions = select_poll_decisions(

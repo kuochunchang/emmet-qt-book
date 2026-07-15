@@ -521,10 +521,10 @@ def resolve_repo(gh_bin: str, workdir: Path, explicit: str | None) -> str:
 
 def poll_github(gh_bin: str, workdir: Path, repo: str) -> dict[str, object]:
     owner, name = repo.split("/", 1)
-    labels = " OR ".join(
-        f'label:\"{label}\"' for label in sorted(OBJECT_LABELS)
+    labels = ",".join(
+        f'"{label}"' for label in sorted(OBJECT_LABELS)
     )
-    search = f"repo:{repo} is:open ({labels})"
+    search = f"repo:{repo} is:open label:{labels}"
     completed = subprocess.run(
         [
             gh_bin,
