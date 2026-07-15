@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.codex_loop_runtime import (
+    agent_event_pane_status,
     build_alert_escalation,
     build_event,
     build_operator_alert,
@@ -22,12 +23,14 @@ from scripts.codex_loop_runtime import (
     detect_stalled_iteration,
     normalize_snapshot,
     notify_agent,
+    operator_pane_status,
     poll_github,
     pull_request_disappeared,
     read_agent_states,
     select_poll_decisions,
     socket_path,
     transition_operator_alert,
+    update_pane_title,
     workflow_state_fingerprint,
 )
 
@@ -67,6 +70,121 @@ def snapshot(
         "issues": issues or [],
         "pull_requests": pull_requests or [],
     }
+
+
+class PaneTitleTests(unittest.TestCase):
+    def test_agent_title_names_current_action_and_work_object(self) -> None:
+        issue_event = {
+            "reason": "coding-work-available",
+            "objects": [loop_object("issue", 3, "loop:coding")],
+        }
+        review_event = {
+            "reason": "review-requested",
+            "objects": [
+                loop_object("issue", 3, "loop:coding"),
+                loop_object("pull_request", 59, "loop:needs-review"),
+            ],
+        }
+
+        self.assertEqual("撰寫中：Issue #3", agent_event_pane_status(issue_event))
+        self.assertEqual("審查中：PR #59", agent_event_pane_status(review_event))
+
+    def test_operator_title_prioritizes_running_and_blocking_state(self) -> None:
+        issue = loop_object("issue", 3, "loop:coding")
+        self.assertEqual(
+            "正常：coder 執行中／Issue #3",
+            operator_pane_status(
+                {
+                    "health": "running",
+                    "owner": "coder",
+                    "affected_role": "coder",
+                    "busy_roles": ["coder"],
+                    "objects": [issue],
+                }
+            ),
+        )
+        self.assertEqual(
+            "阻斷：reviewer 無法接收事件",
+            operator_pane_status(
+                {
+                    "health": "blocked",
+                    "owner": "operator",
+                    "affected_role": "reviewer",
+                    "reason": "delivery-failed",
+                    "objects": [issue],
+                }
+            ),
+        )
+        self.assertEqual(
+            "阻斷：WIP 狀態衝突",
+            operator_pane_status(
+                {
+                    "health": "blocked",
+                    "owner": "dispatcher",
+                    "affected_role": None,
+                    "reason": "wip-invariant-violation",
+                    "objects": [issue],
+                }
+            ),
+        )
+
+    def test_active_alert_stays_visible_while_recovery_runs(self) -> None:
+        self.assertEqual(
+            "告警處理中：coder",
+            operator_pane_status(
+                {
+                    "health": "running",
+                    "owner": "dispatcher",
+                    "affected_role": "dispatcher",
+                    "busy_roles": ["dispatcher"],
+                    "objects": [],
+                },
+                {"affected_role": "coder"},
+            ),
+        )
+
+    def test_tmux_title_update_is_opt_in_and_targets_current_pane(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with (
+            patch.dict(os.environ, {"TMUX_PANE": "%7"}),
+            patch(
+                "scripts.codex_loop_runtime.subprocess.run",
+                return_value=completed,
+            ) as run,
+        ):
+            self.assertTrue(
+                update_pane_title(
+                    "coder",
+                    "撰寫中：Issue #3",
+                    enabled=True,
+                    tmux_bin="/usr/bin/tmux",
+                )
+            )
+
+        self.assertEqual(
+            [
+                "/usr/bin/tmux",
+                "select-pane",
+                "-t",
+                "%7",
+                "-T",
+                "coder (撰寫中：Issue #3)",
+            ],
+            run.call_args.args[0],
+        )
+
+        with patch(
+            "scripts.codex_loop_runtime.subprocess.run"
+        ) as disabled_run:
+            self.assertFalse(
+                update_pane_title(
+                    "coder",
+                    "等待事件",
+                    enabled=False,
+                    tmux_bin="tmux",
+                )
+            )
+        disabled_run.assert_not_called()
 
 
 class EventRoutingTests(unittest.TestCase):
