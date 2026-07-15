@@ -1,6 +1,6 @@
 ---
 name: emmet-loop-reviewer
-description: "Execute exactly one independent reviewer iteration for the emmet-qt-book GitHub label loop. Use only when the user or a scheduled wake explicitly invokes $emmet-loop-reviewer to review the oldest unblocked loop:needs-review PR, rerun evidence, and publish a SHA-bound verdict; never invoke for ordinary review."
+description: "Execute exactly one independent reviewer iteration for the emmet-qt-book GitHub label loop. Use only when the user or the loop event manager explicitly invokes $emmet-loop-reviewer to review the oldest unblocked loop:needs-review PR, rerun evidence, and publish a SHA-bound verdict; never invoke for ordinary review."
 ---
 
 # Emmet Loop Reviewer

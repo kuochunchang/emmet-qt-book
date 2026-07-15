@@ -1,6 +1,6 @@
 ---
 name: emmet-loop-dispatcher
-description: "Execute exactly one idempotent dispatcher iteration for the emmet-qt-book GitHub label loop. Use only when the user or a scheduled wake explicitly invokes $emmet-loop-dispatcher to reconcile loop state, merge an approved PR, dispatch active-gate work, detect a gate exit, or report a block; never use for ordinary repository work."
+description: "Execute exactly one idempotent dispatcher iteration for the emmet-qt-book GitHub label loop. Use only when the user or the loop event manager explicitly invokes $emmet-loop-dispatcher to reconcile loop state, merge an approved PR, dispatch active-gate work, detect a gate exit, or report a block; never use for ordinary repository work."
 ---
 
 # Emmet Loop Dispatcher
@@ -47,4 +47,4 @@ description: "Execute exactly one idempotent dispatcher iteration for the emmet-
 
 每輪只完成一個可稽核的邏輯動作；留言使用 `— Dispatcher`。Gate transition 只通知，
 永不代替使用者核准或執行。結束時摘要 `role`、`result`、`object`、`main_sha`、
-`head_sha` 與 `mutations`；`result` 使用穩定 kebab-case，供外部 scheduler log 稽核。
+`head_sha` 與 `mutations`；`result` 使用穩定 kebab-case，供 agent JSONL log 稽核。

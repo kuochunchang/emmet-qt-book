@@ -17,7 +17,7 @@ import shutil
 import signal
 import subprocess
 import sys
-from typing import Iterator, Sequence
+from typing import Callable, Iterator, Sequence
 
 
 ROLES = ("dispatcher", "coder", "reviewer")
@@ -33,11 +33,13 @@ CONTROL_PATHS = (
     ".codex",
     "CLAUDE.md",
     "docs/agent-loop.md",
+    "docs/agent-loop-operations.md",
     "docs/authoring-guide.md",
     "docs/curriculum.md",
     "docs/superpowers/specs/2026-07-13-agent-loop-skills-design.md",
     "scripts/codex-loop",
     "scripts/codex_loop.py",
+    "scripts/codex_loop_runtime.py",
 )
 
 
@@ -168,9 +170,9 @@ def build_command(
 
     prompt = (
         f"Use $emmet-loop-{role} to execute exactly one idempotent {role} "
-        "iteration for this repository, then stop. Do not sleep, poll, schedule "
-        "another run, or start a second iteration. If no safe action is available, "
-        "report no-op and exit."
+        "iteration for this repository, then stop. This wake came from the loop "
+        "event manager. Do not sleep, poll, schedule another run, or start a second "
+        "iteration. If no safe action is available, report no-op and exit."
     )
     command = [
         codex_bin,
@@ -235,6 +237,7 @@ def run_child(
     workdir: Path,
     lock_descriptor: int,
     timeout_seconds: float,
+    on_signal: Callable[[], None] | None = None,
 ) -> int:
     """Run Codex in its own process group while the child also holds the lock."""
 
@@ -261,6 +264,8 @@ def run_child(
     )
 
     def forward_signal(signum: int, _frame: object) -> None:
+        if on_signal is not None:
+            on_signal()
         try:
             os.killpg(child.pid, signum)
         except ProcessLookupError:

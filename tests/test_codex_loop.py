@@ -332,6 +332,20 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         mode = ADAPTER.stat().st_mode
         self.assertTrue(mode & stat.S_IXUSR)
 
+    def test_public_wrapper_exposes_agent_and_events_components(self) -> None:
+        for component in ("agent", "events"):
+            with self.subTest(component=component):
+                completed = subprocess.run(
+                    [str(ADAPTER), component, "--help"],
+                    cwd=ROOT,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                self.assertIn("usage:", completed.stdout)
+
     def test_canonical_protocol_keeps_cross_client_safety_invariants(self) -> None:
         protocol = (ROOT / "docs" / "agent-loop.md").read_text(encoding="utf-8")
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -347,7 +361,9 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, protocol)
-        self.assertIn("一次 role wake 只執行一輪", protocol)
+        self.assertIn("CLI 分成兩種長生命週期 component", protocol)
+        self.assertIn("每個事件只啟動一次", protocol)
+        self.assertIn("scripts/codex-loop events", protocol)
         self.assertIn(".claude/skills/", agents)
         self.assertIn(".agents/skills/", agents)
         self.assertIn("不安裝或啟用主機 scheduler", agents)

@@ -1,133 +1,74 @@
 # 三角色 agent loop 操作指南
 
-本專案提供三個 Codex 一次性角色 skill：
+本專案用四個長生命週期 CLI component 推動三個短生命週期 Codex role：
 
-- `$emmet-loop-dispatcher`：reconciliation、派工、合併已核准 PR，以及彙整 gate
-  退出證據。
-- `$emmet-loop-coder`：認領或恢復一件派工、實作、驗證並交審。
-- `$emmet-loop-reviewer`：獨立驗證 integration candidate，發布綁定 head／main SHA
-  的裁決。
+- `agent dispatcher`：等待 dispatcher 事件；每次事件啟動一次
+  `$emmet-loop-dispatcher`。
+- `agent coder`：等待 coder 事件；每次事件啟動一次 `$emmet-loop-coder`。
+- `agent reviewer`：等待 reviewer 事件；每次事件啟動一次
+  `$emmet-loop-reviewer`。
+- `events`：定期 polling GitHub live state，依協定只通知目前負責的 agent。
 
-本文件是給操作者使用的部署與喚醒指南，不是第四份狀態機。角色權限、label、
-狀態轉移與安全規則以 [`agent-loop.md`](agent-loop.md) 為正本；目前允許
-工作的 gate 以 [`AGENTS.md`](../AGENTS.md) 與
-[`curriculum.md`](curriculum.md) 為準。
+本文件是操作者導覽，不是第四份狀態機。角色權限、label、routing、狀態轉移與
+安全規則以 [`agent-loop.md`](agent-loop.md) 為正本；目前允許工作的 gate 以
+[`AGENTS.md`](../AGENTS.md) 與 [`curriculum.md`](curriculum.md) 為準。
 
 ## 執行模型
 
-每次 role wake 只執行一輪，最多完成一個主要狀態轉移，然後退出。連續運作由角色
-外部的 scheduler 反覆喚醒：
-
 ```text
-external scheduler
-  -> dispatcher
-  -> coder
-  -> reviewer
-  -> dispatcher
-  -> 等待後重複
+                         Unix socket event
+GitHub <- poll -- events --------------------> responsible agent
+  ^                                               |
+  |                                               | codex exec --json
+  +-------- role iteration mutations <------------+
 ```
 
-角色內不得使用 `sleep`、輪詢、遞迴啟動或常駐 shell loop。沒有符合條件的工作時，
-角色回報 no-op 並退出；GitHub Issue、PR、label、留言與完整 commit SHA 保存跨輪狀態。
+只有 `events` component 輪詢。三個 agent component 可以常駐，但只阻塞等待自己的
+Unix socket；role skill 與每個 Codex child 仍只做一輪，不 sleep、不 poll、不啟動
+下一輪。每個 child 結束後，agent 回到等待狀態。
 
-自動閉環只在目前 active gate 內運作。Dispatcher 發現 gate 退出證據已齊時會停止派工
-並通知使用者；只有使用者明確核准、gate-transition PR 合併、Meta Issue #1 完成同步，
-且三份治理真相一致後，下一 gate 才能開始。
+GitHub Issue、PR、label、留言與完整 commit SHA 是跨重啟的唯一 durable workflow
+state。Socket、event ID、fingerprint 與 manager 記憶體都只是喚醒機制；任一 component
+中斷或重啟後，下一個 role iteration 仍先以 GitHub 做 reconciliation。
+
+Event manager 不產生 GitHub mutation。它只依 canonical routing 選出 dispatcher、
+coder 或 reviewer；agent ACK 後，同一 state 預設 30 分鐘才 heartbeat 重送。State
+改變立即通知；agent 尚未啟動或 delivery 失敗則每次 poll 重試。任何 Codex child
+執行期間不送新的 wake；在途 state 持續時，manager 每 30 分鐘先單獨喚醒 dispatcher
+做 reconciliation 與停滯檢查，再回到 state owner。
 
 ## Gate transition：人類 checkpoint
 
-Gate 退出不是一般 loop state transition，而是刻意保留給使用者的控制點。Dispatcher
-在 Meta Issue #1 留下 gate 退出證據後停止派工；此時沒有 `loop:*` primary state 通常
-是正常的等待狀態，不代表 coder 或 reviewer 故障。新 gate 只有在 `main` 的
-`AGENTS.md`、curriculum 與 Meta Issue #1 三者一致後才生效。
+Gate 退出不是一般 loop state transition。Dispatcher 彙整退出證據後停止派工；只有
+使用者明確核准、gate-transition PR 合併、Meta Issue #1 完成同步，且三份治理真相
+一致後，下一 gate 才能開始。
 
-```text
-active-gate loop
-  -> dispatcher 彙整退出證據並停止派工
-  -> 人類 checkpoint：核准 transition
-  -> 圈外 transition Issue／PR
-  -> transition PR 合併至 main
-  -> Meta #1 同步 + 三方一致性核對
-  -> trusted runners 同步至新 main
-  -> dispatcher 派出新 gate 的第一個 slice
-  -> coder -> reviewer -> dispatcher
-```
+Checkpoint 期間：
 
-### 如何辨識 checkpoint
+1. 先停止 `events`，避免產生新 wake；若其他 client 仍可能工作，由使用者在 Meta
+   Issue #1 加上 `loop:paused`。
+2. 確認沒有半完成 label transaction、stale approval、blocked 或無法解釋的 WIP。
+   有異常時，先以單輪 `codex-loop dispatcher` 做 reconciliation。
+3. 使用者以獨立 Issue 明確核准 transition；Issue 連結 Dispatcher gate-exit marker、
+   完整 `MAIN_SHA`、退出證據與 transition PR。未獲核准就停在 checkpoint。
+4. 普通 session 依 `AGENTS.md` 建立圈外 transition PR，不呼叫三個 loop role。
+   同一個 PR 同步更新 `AGENTS.md` 與 curriculum 的 active gate、前一 gate 證據及
+   允許／禁止範圍。
+5. Transition PR 必須 base=`main`、非 draft、保持無 `loop:*` label，tracked diff
+   只包含已核准治理範圍。它不得由 dispatcher 的自動合併例外合併，也不得使用
+   auto-merge；使用者依目前完整 head SHA 重新確認後，才由 UI 或明確授權的普通
+   session 以 head-match 保護合併。
+6. 合併後立即更新 Meta Issue #1：記錄新 active gate、前一 gate 完成證據、
+   transition PR merge SHA 與下一步，再依 repository 規則完成 transition Issue。
+7. 從最新 `origin/main` 核對 `AGENTS.md`、curriculum 與 Meta Issue #1 三者完全
+   一致；在此之前不得宣稱新 gate 生效或派下一 gate。
+8. 依「治理更新後同步 runners」移動 trusted runners、重跑四項 dry-run。
+9. 若使用了 `loop:paused`，由使用者移除。先保持 `events` 停止，手動執行一次
+   dispatcher；確認它留下有效派工與唯一 `loop:queued` 後，才啟動完整四 component
+   並人工觀察第一圈 dispatcher → coder → reviewer → dispatcher。
 
-同時符合下列條件時，把目前狀態視為 gate checkpoint：
-
-1. Dispatcher 已在 Meta Issue #1 留下綁定完整 `main` SHA 的 gate-exit 證據。
-2. Curriculum 的目前 gate 退出條件已由合併到 `main` 的 Issue／PR／驗證證據滿足。
-3. 沒有任何未完成或 blocked 的 loop Issue／PR，也沒有殘留 primary／blocked labels；
-   下一 gate 的工作尚未被派工。
-4. `AGENTS.md`、curriculum 與 Meta Issue #1 仍宣告舊 gate，或 transition 尚未完成。
-
-若有半完成 transaction、互斥 labels、stale approval 或無法解釋的在途工作，這不是
-checkpoint；先喚醒 dispatcher 做 reconciliation，不能直接進行 gate transition。
-
-需要協助逐項核對時，由人類明確呼叫 `$emmet-gate-auditor`。它只讀取固定
-`MAIN_SHA` 與 GitHub live evidence，分開報告退出條件與 transition 狀態；不留言、
-不改 label、不派工，也不替人類核准 gate transition。
-
-### 通用處理程序
-
-1. 停止外部 timer 或停用 App Scheduled Tasks，避免 checkpoint 期間反覆 no-op 與
-   浪費額度。若仍可能有其他 client 喚醒角色，由使用者在 Meta Issue #1 加上
-   `loop:paused` 作全域煞車。
-2. 使用者明確核准從 `<OLD_GATE>` 前進到 `<NEW_GATE>`，並以獨立 Issue 追蹤
-   transition。Issue 應連結 Dispatcher gate-exit marker、完整 `MAIN_SHA`、退出證據與
-   transition PR；未獲核准就停在 checkpoint。
-3. 使用普通、明確授權的 Codex／Claude session 建立或完成圈外 transition PR；不要
-   呼叫 dispatcher／coder／reviewer。該 PR 依 `AGENTS.md` 同步更新
-   `AGENTS.md` 與 curriculum 的 active gate、前一 gate 證據及允許／禁止範圍。
-4. Transition PR 必須 base=`main`、非 draft、保持無 `loop:*` label，且 tracked diff
-   只包含使用者核准的治理範圍。使用者確認核准仍適用於目前完整 head SHA，並核對
-   驗證與 mergeability 後，可在最後一次重查 head 後立即由 GitHub UI 合併，或明確
-   授權普通 session 使用：
-
-   ```bash
-   gh pr merge <TRANSITION_PR> --squash --delete-branch \
-     --match-head-commit <FULL_HEAD_SHA>
-   ```
-
-   不得使用 auto-merge。Dispatcher 不得替 transition PR 加 `loop:approved`，也不得
-   利用 loop 的自動合併例外合併它。
-5. 合併後立即更新 Meta Issue #1：寫入新 active gate、前一 gate 完成證據、
-   transition PR merge SHA 與新 gate 的下一步。完成 transition Issue 的 checklist、
-   留下三方核對證據，再依 repository 規則關閉 transition Issue。
-6. 從最新 `origin/main` 核對 `AGENTS.md`、curriculum 與 Meta Issue #1 完全一致；在此
-   之前不得宣稱新 gate 生效，也不得派下一 gate。
-7. 依下方「Gate 或治理文件更新後同步 runner」停止喚醒、將所有 detached trusted
-   runners 移到最新 `origin/main`，確認乾淨與 control inputs 一致，再對三個角色
-   重跑 `--dry-run`。
-8. 若使用了 `loop:paused`，由使用者移除；先保持 timer 或 Scheduled Tasks 停止，
-   單獨喚醒 dispatcher。只有看到署名派工留言，且目標 Issue 的唯一 primary state 是
-   無 `loop:blocked` 的 `loop:queued`，才可喚醒 coder。若 dispatcher 本輪只完成
-   reconciliation 或安全 no-op，先處理或確認該結果，再只喚醒 dispatcher；不得跳到
-   coder。
-9. 第一個 slice 依序手動觀察 `dispatcher -> coder -> reviewer -> dispatcher`。Reviewer
-   退件時回到 `coder -> reviewer`；只有 `loop:approved` 才由 dispatcher 合併。第一圈
-   durable state 與合併結果都正確後，才恢復 timer 或 Scheduled Tasks。
-
-### W1-G0 到 W1-G1 對照
-
-| 通用項目 | 本次對照 |
-| --- | --- |
-| 舊 gate | `W1-G0` |
-| 退出證據 | Issue #8／PR #37 與 Issue #7／PR #39；Meta #1 的 Dispatcher gate-exit 留言 |
-| Transition 追蹤 | Issue #43 |
-| 圈外 transition PR | PR #44；不得加 `loop:*` label，也不得由 dispatcher 合併 |
-| 新 gate | `W1-G1`，必須等 PR #44 合併及 Meta #1 三方同步後才生效 |
-| 新 gate 第一個 bundle | Issue #2；Issue #7 只隨章更新並保持開啟 |
-
-在 PR #44 與 Meta #1 transition 尚未完成前，重複喚醒 dispatcher 只應安全停止或
-no-op；coder 與 reviewer 沒有工作。三方一致且 runners 同步後，第一個 dispatcher
-才可依 `W1-G1` 從 Issue #2 派出一個受限 slice，而不是一次派完整 gate。
-
-不要用下列捷徑跨過 checkpoint：把 feature branch 的 gate 文字視為已生效、替
-transition PR 補 loop labels、直接喚醒 coder、預先 queue 下一 gate，或在 trusted
-runners 尚未同步時恢復 scheduler。
+需要逐項唯讀核對時，由人類明確呼叫 `$emmet-gate-auditor`；它不留言、不改 label、
+不派工，也不替人類核准 transition。
 
 ## 前置條件
 
@@ -135,18 +76,21 @@ runners 尚未同步時恢復 scheduler。
 
 1. `origin/main` 上的 `AGENTS.md`、curriculum 與 Meta Issue #1 對 active gate 的描述
    一致。
-2. `codex` 與 `gh` 已登入，且執行帳號能 fetch repository、讀寫 loop labels／comments
-   及操作 PR。
-3. Trusted runners 是本 repository 的 linked worktree，不含候選 PR 內容，也不拿來
-   checkout task branch。
+2. `codex` 與 `gh` 已登入；帳號能 fetch repository、讀寫 loop labels／comments 及
+   操作 PR。
+3. Trusted runners 是本 repository 的乾淨 linked worktree，不含候選 PR 內容，也
+   不拿來 checkout task branch。
 4. Meta Issue #1 沒有 `loop:paused`。
-5. 主機排程由使用者另行核准、建立與啟用；repository 不會自行安裝 scheduler。
+5. 四個 component 都由最新 `origin/main` 的同一版 adapter 啟動；不要混用舊 runner
+   上的 script。
+
+Repo 不安裝 cron、systemd unit 或其他主機 scheduler；此模型本身不需要定時器，
+polling 由 `events` process 內建。
 
 ## 建立 dedicated trusted runners
 
-以下範例假設主要 checkout 位於 `/home/guojun/workspace/emmet-qt-book`。三個 runner
-都使用 detached `origin/main`，讓操作者平常使用的 checkout 不會成為候選內容或控制
-指令來源：
+以下範例假設主要 checkout 位於
+`/home/guojun/workspace/emmet-qt-book`：
 
 ```bash
 git -C /home/guojun/workspace/emmet-qt-book fetch origin main --prune
@@ -162,185 +106,156 @@ git -C /home/guojun/workspace/emmet-qt-book worktree add --detach \
 ```
 
 路徑已存在時不要重建；先確認它確實是同一 repository 的乾淨 linked worktree。
+Coder 的 task worktree 與 Reviewer 的 disposable candidate worktree 由各自 role
+iteration 另外建立，不能把 trusted runner 當候選 worktree。
 
-## 預檢與手動執行
+## 預檢
 
-從 dispatcher runner 的 adapter 指定每個角色的 trusted workdir：
+固定從 dispatcher runner 的 adapter 啟動四個 component，並把各角色指向自己的
+trusted workdir：
 
 ```bash
 ADAPTER=/home/guojun/workspace/emmet-qt-book-dispatcher/scripts/codex-loop
 
-"$ADAPTER" dispatcher \
+"$ADAPTER" agent dispatcher \
   --workdir /home/guojun/workspace/emmet-qt-book-dispatcher --dry-run
-"$ADAPTER" coder \
+"$ADAPTER" agent coder \
   --workdir /home/guojun/workspace/emmet-qt-book-coder --dry-run
-"$ADAPTER" reviewer \
+"$ADAPTER" agent reviewer \
   --workdir /home/guojun/workspace/emmet-qt-book-reviewer --dry-run
+"$ADAPTER" events \
+  --workdir /home/guojun/workspace/emmet-qt-book-dispatcher --once --dry-run
 ```
 
-若符合上方 gate checkpoint 條件，不要接著照抄完整四步週期。先完成 transition、
-三方同步、runner 更新與 dry-run；保持 scheduler 停止，且只先喚醒 dispatcher。等它
-留下有效派工與 `loop:queued` 後，才喚醒 coder。
+Agent dry-run 會 fetch、驗證 repository identity、origin、control inputs、role skill
+與 Codex executable，列印 shell-safe `codex exec` command 及 socket path，但不取得
+鎖、不建立 socket、不啟動 Codex。Events dry-run 會真的讀一次 GitHub，列出
+`would-notify` event，但不連線 agent 或修改 GitHub。
 
-三項都通過後，可先手動執行一個完整週期：
+任何 runner 不乾淨、control input 與 `origin/main` 不同、repo identity 不符或
+GitHub polling 失敗，都要先修正；不得使用 dangerous bypass 或把 candidate branch
+當控制來源。
+
+## 啟動
+
+開四個操作者可見終端。每個終端先設定相同的 `ADAPTER` 路徑；前三個先啟動
+agent，最後才啟動 event manager。
 
 ```bash
-"$ADAPTER" dispatcher \
+# 每個終端先執行
+ADAPTER=/home/guojun/workspace/emmet-qt-book-dispatcher/scripts/codex-loop
+
+# 終端一
+"$ADAPTER" agent dispatcher \
   --workdir /home/guojun/workspace/emmet-qt-book-dispatcher
-"$ADAPTER" coder \
+
+# 終端二
+"$ADAPTER" agent coder \
   --workdir /home/guojun/workspace/emmet-qt-book-coder
-"$ADAPTER" reviewer \
+
+# 終端三
+"$ADAPTER" agent reviewer \
   --workdir /home/guojun/workspace/emmet-qt-book-reviewer
+
+# 終端四
+"$ADAPTER" events \
+  --workdir /home/guojun/workspace/emmet-qt-book-dispatcher \
+  --interval-seconds 60 \
+  --retry-seconds 1800 \
+  --dispatcher-heartbeat-seconds 1800
+```
+
+`--interval-seconds` 是 GitHub polling 間隔；`--retry-seconds` 是同一 state 已 ACK
+後重新通知 owner 的間隔；`--dispatcher-heartbeat-seconds` 是在途 state 的 dispatcher
+oversight 間隔。縮短 polling 會增加 GitHub API 使用量；縮短兩種 heartbeat 會增加
+Codex no-op 與額度消耗。若 socket delivery 失敗，manager 不等 retry window，而是
+下一個 poll 再送。
+
+每個角色只有一個常駐 agent。第二個同角色 process 會因 per-role `flock` 以 75
+退出；第二個 event manager 也會因 `events` lock 以 75 退出。不同角色 socket 使用
+同一個由 Git common-dir 派生的 runtime directory，因此從三個 linked worktree 啟動
+仍能互相找到。
+
+## 觀看完整訊息
+
+Agent 以 `codex exec --ephemeral --json` 啟動每次 iteration。Codex JSONL stdout 與
+stderr 直接繼承到目前終端，不經 buffer、摘要或檔案轉送；因此能即時看到
+`thread.started`、`turn.*`、`item.*`、tool／command、agent message、error 與 usage。
+Agent 自身也用 JSONL 記錄 waiting、收到的 event、child exit code 與 timeout。
+
+需要同時保存畫面時，可由操作者在 repo 外寫 log：
+
+```bash
+"$ADAPTER" agent dispatcher \
+  --workdir /home/guojun/workspace/emmet-qt-book-dispatcher \
+  2>&1 | tee /tmp/emmet-loop-dispatcher.jsonl
+```
+
+Log 可能包含 private repository 路徑、Issue／PR 內容或命令輸出；不得提交 repository，
+分享前先檢查秘密與 private data。
+
+## 手動單輪診斷
+
+事件架構之外仍保留 one-shot 相容入口，供部署前或故障時明確執行一輪：
+
+```bash
 "$ADAPTER" dispatcher \
   --workdir /home/guojun/workspace/emmet-qt-book-dispatcher
 ```
 
-Timer 啟用後不要另外手動喚醒角色；需要手動測試時，先停止 timer 與正在執行的
-cycle，避免繞過 systemd 提供的跨角色順序化。
+使用前先停止對應 agent，否則同一把 role lock 會回傳 75。不要用 cron、systemd
+timer 或 App Scheduled Tasks 重複呼叫這個相容入口；連續運作只用 `agent` + `events`。
 
-Adapter 會先 fetch `origin/main`，驗證 repository identity、origin、control inputs 與
-role skill，再啟動一次 `codex exec --ephemeral`。它不使用 dangerous bypass。
+## 治理更新後同步 runners
 
-## 以 user-level systemd 連續喚醒
+每次 gate transition，或 `AGENTS.md`、`.agents/`、`.claude/`、`.codex/`、loop
+協定、curriculum、authoring guide、adapter 等 control inputs 在 `main` 改變後：
 
-下列配置是操作者可選擇安裝的範例，不是 repository 安裝程序。它把四次 one-shot wake
-放在同一個 `Type=oneshot` service，確保同一 cycle 依序完成；timer 只會在前一 cycle
-結束後再次觸發。
+1. 先停止 `events`，再以 Ctrl-C／SIGTERM 停止三個 agents。若 child 正在執行，
+   agent 會把 signal 轉給整個 child process group，等待退出並釋放 lock。
+2. 若仍可能有其他 client 工作，由使用者加 `loop:paused`。
+3. 確認 runners 乾淨，再移到最新 `origin/main`：
 
-建立 `~/.config/systemd/user/emmet-loop-cycle.service`：
+   ```bash
+   git -C /home/guojun/workspace/emmet-qt-book fetch origin main --prune
+   git -C /home/guojun/workspace/emmet-qt-book-dispatcher switch --detach origin/main
+   git -C /home/guojun/workspace/emmet-qt-book-coder switch --detach origin/main
+   git -C /home/guojun/workspace/emmet-qt-book-reviewer switch --detach origin/main
+   ```
 
-```ini
-[Unit]
-Description=Emmet book Codex agent loop cycle
+4. 不乾淨或無法 switch 時停止，不得以 `reset --hard` 掩蓋未知變更。
+5. 重跑四項 dry-run。Gate transition 依 checkpoint 程序先人工觀察第一圈；其他
+   control-input 更新則在確認版本一致後依「啟動」順序重開。
 
-[Service]
-Type=oneshot
-Environment=HOME=/home/guojun
-Environment=PATH=/home/guojun/.local/bin:/usr/local/bin:/usr/bin:/bin
-WorkingDirectory=/home/guojun/workspace/emmet-qt-book-dispatcher
+## 暫停、恢復與停止
 
-ExecStart=/home/guojun/workspace/emmet-qt-book-dispatcher/scripts/codex-loop dispatcher --workdir /home/guojun/workspace/emmet-qt-book-dispatcher
-ExecStart=/home/guojun/workspace/emmet-qt-book-dispatcher/scripts/codex-loop coder --workdir /home/guojun/workspace/emmet-qt-book-coder
-ExecStart=/home/guojun/workspace/emmet-qt-book-dispatcher/scripts/codex-loop reviewer --workdir /home/guojun/workspace/emmet-qt-book-reviewer
-ExecStart=/home/guojun/workspace/emmet-qt-book-dispatcher/scripts/codex-loop dispatcher --workdir /home/guojun/workspace/emmet-qt-book-dispatcher
-
-SuccessExitStatus=75
-TimeoutStartSec=infinity
-```
-
-建立 `~/.config/systemd/user/emmet-loop-cycle.timer`：
-
-```ini
-[Unit]
-Description=Periodically wake the Emmet Codex agent loop
-
-[Timer]
-OnBootSec=2min
-OnUnitInactiveSec=30min
-Unit=emmet-loop-cycle.service
-
-[Install]
-WantedBy=timers.target
-```
-
-先驗證 unit，再由使用者明確啟用：
-
-```bash
-systemd-analyze --user verify \
-  ~/.config/systemd/user/emmet-loop-cycle.service \
-  ~/.config/systemd/user/emmet-loop-cycle.timer
-
-systemctl --user daemon-reload
-systemctl --user enable --now emmet-loop-cycle.timer
-systemctl --user start emmet-loop-cycle.service
-```
-
-檢查 timer 與執行紀錄：
-
-```bash
-systemctl --user list-timers emmet-loop-cycle.timer
-journalctl --user -u emmet-loop-cycle.service -f
-```
-
-`OnUnitInactiveSec=30min` 是起始建議，不是協定要求。頻繁 no-op 仍會消耗 Codex 額度；
-可依任務量調整，但不得讓不同 cycle 或同一角色重疊。
-
-## Codex App Scheduled Tasks
-
-若使用 Codex App Scheduled Tasks，每個角色建立一個錯開時間的 task，prompt 直接明示：
-
-```text
-Use $emmet-loop-<role> to execute exactly one idempotent iteration for this
-repository, then stop. Do not sleep, poll, schedule another run, or start a
-second iteration. If no safe action is available, report no-op and exit.
-```
-
-App 已負責喚醒時，不要在 scheduled task 裡再執行 `scripts/codex-loop`。只有在 App
-明確保證同一 task 不重疊時才直接排程 skill；否則使用 CLI adapter 與外部 scheduler。
-Scheduled Task 必須指向 dedicated trusted runner，不得指向候選 PR worktree。
-
-OpenAI 官方說明：
-
-- [Scheduled tasks](https://developers.openai.com/codex/app/automations)
-- [Non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)
-
-## Gate 或治理文件更新後同步 runner
-
-Adapter 會 fetch，但不會自動移動 detached runner。每次 gate transition，或
-`AGENTS.md`、`.agents/`、`.claude/`、`.codex/`、loop 協定、curriculum、authoring
-guide、adapter 等 control inputs 在 `main` 改變後，先停止 timer，再同步三個 runner：
-
-```bash
-systemctl --user stop \
-  emmet-loop-cycle.timer emmet-loop-cycle.service
-
-git -C /home/guojun/workspace/emmet-qt-book fetch origin main --prune
-git -C /home/guojun/workspace/emmet-qt-book-dispatcher switch --detach origin/main
-git -C /home/guojun/workspace/emmet-qt-book-coder switch --detach origin/main
-git -C /home/guojun/workspace/emmet-qt-book-reviewer switch --detach origin/main
-```
-
-任一 runner 不乾淨或無法 switch 時停止處理，不得以 `reset --hard` 掩蓋未知變更。
-
-同步後先保持 scheduler 停止，重跑「預檢與手動執行」的三項 dry-run。Gate transition
-依上方 checkpoint 流程手動驗證第一圈後才恢復排程；其他 control-input 更新也要在
-確認三個 runners 與最新 `origin/main` 一致後，才由使用者重啟 timer 或 Scheduled
-Tasks。
-
-## 暫停、恢復與停用
-
-使用者可用 Meta Issue #1 的全域煞車阻止所有角色產生副作用：
+全域 durable brake：
 
 ```bash
 gh issue edit 1 --add-label loop:paused
 ```
 
-確認安全後由使用者恢復：
+Manager 看到 paused 後會通知三個 agents；paused event 本身不啟動 Codex。已在執行的
+role 仍須依協定在任何 mutation 前重查 pause。確認安全後只由使用者恢復：
 
 ```bash
 gh issue edit 1 --remove-label loop:paused
 ```
 
-停用主機排程與正在執行的 cycle：
+停止 `events` 只阻止這台主機送新事件，不是跨 client brake；`loop:paused` 才是所有
+client 共用的 GitHub durable brake。完全停止時先終止 manager，再終止 agents。
 
-```bash
-systemctl --user disable --now emmet-loop-cycle.timer
-systemctl --user stop emmet-loop-cycle.service
-```
+## Exit、錯誤與恢復
 
-`loop:paused` 與停止 timer 的效果不同：前者是所有 client 共用的 GitHub durable brake；
-後者只停止這台主機的 systemd 喚醒。
-
-## Exit codes 與告警
-
-| Exit code | 意義 | Scheduler 處理 |
+| 狀況／code | 意義 | 處理 |
 | --- | --- | --- |
-| `0` | 完成一輪或安全 no-op | 正常 |
-| `75` | 同角色已有 worker 執行 | 正常跳過，不告警 |
-| `124` | 超過單輪 timeout | 告警、停用 timer 並檢查 durable state |
-| `2` | worktree、origin、control input、Codex executable 等預檢失敗 | 告警、停用 timer 並修正部署 |
-| 其他 | Codex child 原始 exit code | 保留 log 並調查 |
+| component 持續執行 | 正常等待／polling | 查看 JSONL log |
+| `0` | 正常手動停止、dry-run 或有限測試完成 | 正常 |
+| `75` | 同角色 agent／one-shot 已持鎖 | 不再啟動第二份；核對 holder PID |
+| child `124` | 單次 iteration timeout | 停止 manager，檢查 durable state 後 reconciliation |
+| component `2` | worktree、origin、control input、executable、socket 或 polling 預檢失敗 | 停止 loop 並修正部署 |
+| `delivery-failed` | agent 不在線、拒絕或無 ACK | 啟動／修復 agent；manager 下次 poll 重試 |
+| 其他 child exit | Codex 原始 exit code | 保存 log；下一 event 先 reconciliation |
 
-Adapter 只有 per-role `flock`；systemd 範例另外用單一 oneshot cycle 避免不同角色跨
-cycle 重疊。遇到不明 push、label、merge 或 timeout 結果時，下一輪必須先依 GitHub
-durable state reconciliation，不得盲目重試 mutation。
+Push、label、comment 或 merge 結果不明時，不靠 event delivery 成功推定 mutation 成功；
+下一個 role iteration 必須先讀 GitHub durable state，不能盲目重試。
