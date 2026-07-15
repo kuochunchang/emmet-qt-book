@@ -74,6 +74,7 @@ def build_component_commands(
     retry_seconds: float,
     dispatcher_heartbeat_seconds: float,
     profile: str | None = None,
+    tmux_bin: str = "tmux",
 ) -> dict[str, list[str]]:
     commands = {
         "dispatcher": [
@@ -82,6 +83,9 @@ def build_component_commands(
             "dispatcher",
             "--workdir",
             str(runners["dispatcher"]),
+            "--tmux-title",
+            "--tmux-bin",
+            tmux_bin,
         ],
         "coder": [
             str(adapter_path),
@@ -89,6 +93,9 @@ def build_component_commands(
             "coder",
             "--workdir",
             str(runners["coder"]),
+            "--tmux-title",
+            "--tmux-bin",
+            tmux_bin,
         ],
         "reviewer": [
             str(adapter_path),
@@ -96,12 +103,18 @@ def build_component_commands(
             "reviewer",
             "--workdir",
             str(runners["reviewer"]),
+            "--tmux-title",
+            "--tmux-bin",
+            tmux_bin,
         ],
         "events": [
             str(adapter_path),
             "events",
             "--workdir",
             str(runners["dispatcher"]),
+            "--tmux-title",
+            "--tmux-bin",
+            tmux_bin,
             "--interval-seconds",
             str(interval_seconds),
             "--retry-seconds",
@@ -525,10 +538,23 @@ def create_tmux_session(
         "-t",
         f"{session}:loop",
         "pane-border-format",
-        " #{pane_title} ",
+        " #{pane_title}#{?pane_dead, [已退出],} ",
     )
+    initial_titles = {
+        "dispatcher": "dispatcher (啟動中)",
+        "coder": "coder (啟動中)",
+        "reviewer": "reviewer (啟動中)",
+        "events": "events (等待 agents)",
+    }
     for role, pane in panes.items():
-        tmux_command(tmux_bin, "select-pane", "-t", pane, "-T", role)
+        tmux_command(
+            tmux_bin,
+            "select-pane",
+            "-t",
+            pane,
+            "-T",
+            initial_titles[role],
+        )
     return panes
 
 
@@ -807,6 +833,7 @@ def launch(options: argparse.Namespace) -> int:
         retry_seconds=options.retry_seconds,
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
         profile=options.profile,
+        tmux_bin=tmux_bin,
     )
 
     if options.action == "status":
@@ -883,6 +910,7 @@ def launch(options: argparse.Namespace) -> int:
         retry_seconds=options.retry_seconds,
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
         profile=options.profile,
+        tmux_bin=tmux_bin,
     )
     run_preflight(adapter_path, runners, options.profile)
 

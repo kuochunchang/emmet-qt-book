@@ -121,12 +121,29 @@ cd /home/guojun/workspace/emmet-qt-book
 | 左下 | reviewer agent |
 | 右下 | event manager |
 
+每個 pane 的上邊框會持續顯示 component 名稱與目前狀態，不必先從捲動中的 JSONL
+尋找最後一筆紀錄。例如：
+
+- `dispatcher (等待事件)`：component 正常，尚未輪到 dispatcher。
+- `coder (撰寫中：Issue #3)`：coder 的單輪 Codex child 正在處理該 Issue。
+- `reviewer (審查中：PR #59)`：reviewer 正在審查該 PR。
+- `events (正常：coder 執行中／Issue #3)`：event manager 仍正常輪詢，流程 owner
+  正在工作。
+- `events (停滯：coder／Issue #3)` 或 `events (阻斷：...)`：推進需要恢復或人工
+  注意；搭配該 pane 最新的 `operator-alert` 查完整證據。
+
+Agent child 成功結束後標題回到 `等待事件`；非零 exit 或 timeout 會保留在標題中，
+直到下一輪開始。Component 正常停止會顯示 `已停止`；若 pane 內程序非預期退出，
+tmux 邊框會自動附加 `[已退出]`。Pane title 是易讀的即時摘要，不是 durable state；
+跨重啟仍以 GitHub Issue、PR、label、留言與完整 SHA 為準。
+
 ### 右下角：流程健康與下一步
 
-右下角 event manager 每次 poll 都輸出一筆 `operator-status`。先看
-`health`、`blocking`、`owner`，再讀 `current`、`next` 與 `attention`；
-最後一筆就是目前判定。這和 `tmux status` 不同：後者只證明 process、session 與
-runner 版本健康，不能證明 workflow 正在前進。
+先看右下角 pane title 判斷正常、暫停、停滯或阻斷；需要原因與恢復條件時，再看
+event manager 每次 poll 輸出的完整 `operator-status`。其中先讀
+`health`、`blocking`、`owner`，再看 `current`、`next` 與 `attention`；
+這和 `tmux status` 不同：後者只證明 process、session 與 runner 版本健康，
+不能證明 workflow 正在前進。
 
 | 畫面值 | 操作者判讀 |
 | --- | --- |

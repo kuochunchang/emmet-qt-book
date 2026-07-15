@@ -67,6 +67,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 self.assertEqual(["--profile", "loop"], commands[role][-2:])
                 self.assertNotIn("--model", commands[role])
         self.assertNotIn("--profile", commands["events"])
+        for command in commands.values():
+            self.assertIn("--tmux-title", command)
+            self.assertIn("--tmux-bin", command)
 
     def test_preflight_checks_the_selected_profile_for_every_agent(self) -> None:
         runners = launcher.runner_workdirs(Path("/workspace/emmet-qt-book"))
@@ -231,6 +234,28 @@ class CodexLoopTmuxTests(unittest.TestCase):
             ],
             splits,
         )
+        titles = {
+            args[args.index("-t") + 1]: args[-1]
+            for args in calls
+            if args[1] == "select-pane" and "-T" in args
+        }
+        self.assertEqual(
+            {
+                "%1": "dispatcher (啟動中)",
+                "%2": "coder (啟動中)",
+                "%3": "reviewer (啟動中)",
+                "%4": "events (等待 agents)",
+            },
+            titles,
+        )
+        border_format = next(
+            args[-1]
+            for args in calls
+            if args[1] == "set-window-option"
+            and "pane-border-format" in args
+        )
+        self.assertIn("pane_dead", border_format)
+        self.assertIn("已退出", border_format)
 
     def test_marker_failure_removes_new_session(self) -> None:
         def fake_tmux(

@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
@@ -34,6 +35,8 @@ PRIMARY_LABELS = (
 OBJECT_LABELS = frozenset((*PRIMARY_LABELS, "loop:blocked"))
 MAX_EVENT_BYTES = 64 * 1024
 MAX_COMPLETED_EVENTS = 4
+MAX_PANE_STATUS_CHARS = 48
+PANE_ID_PATTERN = re.compile(r"^%[0-9]+$")
 EVENT_QUERY = """
 query EmmetLoopState($owner: String!, $name: String!, $search: String!) {
   repository(owner: $owner, name: $name) {
@@ -68,6 +71,149 @@ def emit(**fields: object) -> None:
     """Write one operator-visible JSONL component record."""
 
     print(json.dumps(fields, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def _clean_pane_status(value: object) -> str:
+    """Keep a pane title short, single-line, and free of control characters."""
+
+    status = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value))
+    status = " ".join(status.split()) or "狀態未知"
+    if len(status) > MAX_PANE_STATUS_CHARS:
+        status = status[: MAX_PANE_STATUS_CHARS - 1].rstrip() + "…"
+    return status
+
+
+def update_pane_title(
+    component: str,
+    status: object,
+    *,
+    enabled: bool,
+    tmux_bin: str,
+) -> bool:
+    """Best-effort update of this component's launcher-owned tmux pane."""
+
+    pane = os.environ.get("TMUX_PANE", "")
+    if not enabled or PANE_ID_PATTERN.fullmatch(pane) is None:
+        return False
+    title = f"{component} ({_clean_pane_status(status)})"
+    try:
+        completed = subprocess.run(
+            [tmux_bin, "select-pane", "-t", pane, "-T", title],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def _object_reference(
+    value: object,
+    *,
+    prefer_pull_request: bool = False,
+) -> str | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    kinds = (
+        ("pull_request", "PR"),
+        ("issue", "Issue"),
+    )
+    if not prefer_pull_request:
+        kinds = tuple(reversed(kinds))
+    for expected_kind, label in kinds:
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            number = item.get("number")
+            if item.get("kind") == expected_kind and isinstance(number, int):
+                return f"{label} #{number}"
+    return None
+
+
+def agent_event_pane_status(event: Mapping[str, object]) -> str:
+    """Return a bounded operator-facing summary for one role wake."""
+
+    reason = str(event.get("reason") or "")
+    actions = {
+        "coding-work-available": "撰寫中",
+        "changes-requested": "修正中",
+        "review-requested": "審查中",
+        "approved-pull-request": "合併檢查中",
+        "reconcile-or-dispatch": "派工中",
+        "reconciliation-required": "協調中",
+        "wip-invariant-violation": "排除 WIP 衝突",
+        "pull-request-issue-reconciliation": "同步 Issue／PR",
+        "invalid-pull-request-state": "修復 PR 狀態",
+        "invalid-issue-state": "修復 Issue 狀態",
+        "oversight-heartbeat": "巡檢中",
+        "pull-request-disappeared": "合併後整理",
+        "operator-stall-reconciliation": "排除停滯",
+    }
+    action = actions.get(reason, "執行中")
+    reference = _object_reference(
+        event.get("objects"),
+        prefer_pull_request=reason
+        in {
+            "changes-requested",
+            "review-requested",
+            "approved-pull-request",
+            "pull-request-issue-reconciliation",
+            "invalid-pull-request-state",
+        },
+    )
+    return f"{action}：{reference}" if reference else action
+
+
+def operator_pane_status(
+    status: Mapping[str, object],
+    active_alert: Mapping[str, object] | None = None,
+) -> str:
+    """Collapse the full operator status into one persistent pane title."""
+
+    health = str(status.get("health") or "unknown")
+    owner = str(status.get("owner") or "operator")
+    affected = str(status.get("affected_role") or owner)
+    reference = _object_reference(status.get("objects"))
+    if active_alert is not None and health in {"healthy", "running"}:
+        alert_role = str(active_alert.get("affected_role") or affected)
+        prefix = "告警處理中" if health == "running" else "告警待解除"
+        return f"{prefix}：{alert_role}"
+    if health == "paused":
+        return "全域暫停"
+    if health == "stalled":
+        return f"停滯：{affected}" + (f"／{reference}" if reference else "")
+    if health == "blocked":
+        reason = str(status.get("reason") or "")
+        if reason == "delivery-failed":
+            return f"阻斷：{affected} 無法接收事件"
+        if reason == "github-poll-failed":
+            return "阻斷：GitHub 讀取失敗"
+        messages = {
+            "concurrent-iterations": "阻斷：多角色同時執行",
+            "reconciliation-required": "阻斷：durable state 需協調",
+            "wip-invariant-violation": "阻斷：WIP 狀態衝突",
+            "pull-request-issue-reconciliation": "阻斷：Issue／PR 不一致",
+            "invalid-pull-request-state": "阻斷：PR 狀態無效",
+            "invalid-issue-state": "阻斷：Issue 狀態無效",
+        }
+        if reason in messages:
+            return messages[reason]
+        return f"阻斷：等待 {affected} 排除"
+    if health == "running":
+        busy = status.get("busy_roles")
+        if isinstance(busy, Sequence) and not isinstance(busy, (str, bytes)):
+            running = next((str(item) for item in busy if item), owner)
+        else:
+            running = owner
+        return f"正常：{running} 執行中" + (
+            f"／{reference}" if reference else ""
+        )
+    if health == "healthy":
+        return f"正常：等待 {owner}" + (f"／{reference}" if reference else "")
+    return f"狀態：{health}"
 
 
 def positive_number(value: str) -> float:
@@ -187,12 +333,22 @@ def _write_agent_state(
 def run_agent(options: argparse.Namespace) -> int:
     """Wait forever by default and run one Codex iteration per wake event."""
 
+    def set_title(status: object) -> None:
+        update_pane_title(
+            options.role,
+            status,
+            enabled=options.tmux_title,
+            tmux_bin=options.tmux_bin,
+        )
+
+    set_title("啟動中")
     requested_workdir = options.workdir or adapter.default_workdir(options.role)
     try:
         workdir, common_dir, command = _prepare_role(
             options.role, requested_workdir, options.codex_bin, options.profile
         )
     except ValueError as error:
+        set_title("啟動失敗：預檢")
         print(f"codex-loop: {error}", file=sys.stderr)
         return 2
 
@@ -244,6 +400,7 @@ def run_agent(options: argparse.Namespace) -> int:
                     result="waiting",
                     socket=str(endpoint),
                 )
+                set_title("等待事件")
                 while not stop_requested:
                     try:
                         connection, _ = server.accept()
@@ -279,6 +436,7 @@ def run_agent(options: argparse.Namespace) -> int:
                                 result="invalid-event",
                                 detail=str(error),
                             )
+                            set_title("等待；事件無效")
                             continue
 
                     processed += 1
@@ -295,7 +453,9 @@ def run_agent(options: argparse.Namespace) -> int:
                             result="paused",
                             event_id=event.get("event_id"),
                         )
+                        set_title("等待事件")
                     else:
+                        set_title(agent_event_pane_status(event))
                         try:
                             workdir, _, command = _prepare_role(
                                 options.role,
@@ -345,9 +505,16 @@ def run_agent(options: argparse.Namespace) -> int:
                             event_id=event.get("event_id"),
                             exit_code=exit_code,
                         )
+                        if exit_code == 0:
+                            set_title("等待事件")
+                        elif exit_code == 124:
+                            set_title("等待；上輪逾時")
+                        else:
+                            set_title(f"等待；上輪 exit {exit_code}")
                     if options.max_events and processed >= options.max_events:
                         break
     except BlockingIOError as error:
+        set_title("啟動失敗：已有同角色")
         emit(
             component="agent",
             role=options.role,
@@ -356,6 +523,7 @@ def run_agent(options: argparse.Namespace) -> int:
         )
         return adapter.EX_TEMPFAIL
     except OSError as error:
+        set_title("錯誤：component")
         print(f"codex-loop: agent socket 錯誤：{error}", file=sys.stderr)
         return 2
     finally:
@@ -363,6 +531,7 @@ def run_agent(options: argparse.Namespace) -> int:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
 
+    set_title("已停止")
     emit(component="agent", role=options.role, result="stopped")
     return 0
 
@@ -1344,12 +1513,22 @@ def _validate_manager_workdir(workdir: Path) -> tuple[Path, Path]:
 def run_events(options: argparse.Namespace) -> int:
     """Poll GitHub and route state-derived events until stopped."""
 
+    def set_title(status: object) -> None:
+        update_pane_title(
+            "events",
+            status,
+            enabled=options.tmux_title,
+            tmux_bin=options.tmux_bin,
+        )
+
+    set_title("啟動中")
     requested_workdir = (options.workdir or adapter.REPOSITORY_ROOT).resolve()
     try:
         workdir, common_dir = _validate_manager_workdir(requested_workdir)
         gh_bin = resolve_executable(options.gh_bin, "GitHub CLI")
         repo = resolve_repo(gh_bin, workdir, options.repo)
     except ValueError as error:
+        set_title("啟動失敗：預檢")
         print(f"codex-loop: {error}", file=sys.stderr)
         return 2
 
@@ -1362,6 +1541,7 @@ def run_events(options: argparse.Namespace) -> int:
     try:
         manager_lock.__enter__()
     except BlockingIOError as error:
+        set_title("啟動失敗：已有 events")
         emit(
             component="events",
             result="already-running",
@@ -1392,8 +1572,10 @@ def run_events(options: argparse.Namespace) -> int:
         retry_seconds=options.retry_seconds,
         runtime_dir=str(runtime_dir),
     )
+    set_title("讀取 GitHub")
     try:
         while not stop_requested:
+            set_title("讀取 GitHub")
             try:
                 snapshot = poll_github(gh_bin, workdir, repo)
                 now = time.monotonic()
@@ -1572,6 +1754,7 @@ def run_events(options: argparse.Namespace) -> int:
                     repository=repo,
                     dry_run=options.dry_run,
                 )
+                set_title(operator_pane_status(operator_status, active_alert))
 
                 emit(
                     component="events",
@@ -1623,6 +1806,7 @@ def run_events(options: argparse.Namespace) -> int:
                     repository=repo,
                     dry_run=options.dry_run,
                 )
+                set_title(operator_pane_status(operator_status, active_alert))
                 print(f"codex-loop: {error}", file=sys.stderr)
                 if options.once or options.dry_run:
                     return 2
@@ -1636,6 +1820,7 @@ def run_events(options: argparse.Namespace) -> int:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         manager_lock.__exit__(None, None, None)
+    set_title("已停止")
     emit(component="events", result="stopped")
     return 0
 
@@ -1651,6 +1836,8 @@ def parser() -> argparse.ArgumentParser:
     agent.add_argument("--workdir", type=Path)
     agent.add_argument("--codex-bin", default="codex")
     agent.add_argument("--profile")
+    agent.add_argument("--tmux-title", action="store_true", help=argparse.SUPPRESS)
+    agent.add_argument("--tmux-bin", default="tmux", help=argparse.SUPPRESS)
     agent.add_argument("--runtime-dir", "--lock-dir", dest="runtime_dir", type=Path)
     agent.add_argument("--dry-run", action="store_true")
     agent.add_argument("--print-command", action="store_true")
@@ -1667,6 +1854,8 @@ def parser() -> argparse.ArgumentParser:
     events = components.add_parser("events", help="poll GitHub 並通知負責角色。")
     events.add_argument("--workdir", type=Path)
     events.add_argument("--gh-bin", default="gh")
+    events.add_argument("--tmux-title", action="store_true", help=argparse.SUPPRESS)
+    events.add_argument("--tmux-bin", default="tmux", help=argparse.SUPPRESS)
     events.add_argument("--repo")
     events.add_argument("--runtime-dir", type=Path)
     events.add_argument(
