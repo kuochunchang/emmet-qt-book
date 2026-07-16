@@ -182,8 +182,8 @@ class CodexLoopAdapterTests(unittest.TestCase):
     def test_repo_defaults_bound_each_role_without_a_profile(self) -> None:
         expected = {
             "dispatcher": ("gpt-5.6-sol", "high"),
-            "coder": ("gpt-5.6-terra", "medium"),
-            "reviewer": ("gpt-5.6-sol", "high"),
+            "coder": ("gpt-5.6-sol", "high"),
+            "reviewer": ("gpt-5.6-sol", "xhigh"),
         }
         for role, (model, effort) in expected.items():
             with self.subTest(role=role):
