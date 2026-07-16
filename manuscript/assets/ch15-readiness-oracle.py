@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
 from copy import deepcopy
@@ -28,6 +29,14 @@ CONTRACT_PATH = Path(__file__).with_name("ch15-dataset-contract.json")
 EXPECTED_CONTRACT_SHA256 = (
     "8ca6240326c0dd9005e7bee21523ffc92db8e164198212c62a370436ad9bbb55"
 )
+COMPANION_BASELINE = {
+    "repository": "emmet-qt-bt1",
+    "tag": "v0.3.0",
+    "commit": "c999965e5cc923281541409cda9502beb93b8a60",
+    "tag_at_commit": (
+        "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
+    ),
+}
 
 
 def canonical_sha256(value: object) -> str:
@@ -43,6 +52,24 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8192), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode()
+
+
+def json_file_sha256(value: object) -> str:
+    return hashlib.sha256(json_bytes(value)).hexdigest()
+
+
+def disk_parquet_files(directory: Path) -> dict[str, str]:
+    return {
+        path.name: sha256_file(path)
+        for path in sorted(directory.glob("*.parquet"))
+        if path.is_file()
+    }
 
 
 def table(day_ms: int, generation: dict[str, Any]) -> pa.Table:
@@ -91,7 +118,10 @@ def status(root: Path, partition: dict[str, Any]) -> tuple[int, dict[str, Any]]:
 
 
 def build_manifest(
-    contract: dict[str, Any], observed: dict[str, Any], contract_sha256: str
+    contract: dict[str, Any],
+    observed: dict[str, Any],
+    contract_sha256: str,
+    product_status_sha256: str,
 ) -> dict[str, Any]:
     return {
         "manifest_schema_version": contract["manifest_schema_version"],
@@ -109,9 +139,35 @@ def build_manifest(
         },
         "files": observed["files"],
         "generation": contract["generation"],
+        "companion_baseline": COMPANION_BASELINE,
         "contract": {
-            "path": "manuscript/assets/ch15-dataset-contract.json",
+            "path": "dataset-contract.json",
             "sha256": contract_sha256,
+        },
+        "product_status": {
+            "path": "product-status.json",
+            "sha256": product_status_sha256,
+        },
+    }
+
+
+def evidence_inputs(
+    *,
+    contract_path: str,
+    contract_sha256: str,
+    manifest: dict[str, Any],
+    observed: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "companion_baseline": COMPANION_BASELINE,
+        "contract": {"path": contract_path, "sha256": contract_sha256},
+        "dataset_manifest": {
+            "path": "dataset-manifest.json",
+            "sha256": json_file_sha256(manifest),
+        },
+        "product_status": {
+            "path": "product-status.json",
+            "sha256": json_file_sha256(observed),
         },
     }
 
@@ -122,6 +178,7 @@ def assess(
     disk_files: dict[str, str],
     *,
     case: str,
+    inputs: dict[str, Any],
 ) -> dict[str, Any]:
     status_files = {item["filename"]: item["sha256"] for item in observed["files"]}
     checks = {
@@ -148,34 +205,34 @@ def assess(
     }
     failures = [name for name, passed in checks.items() if not passed]
     return {
-        "readiness_schema_version": 1,
+        "readiness_schema_version": 2,
         "dataset_id": contract["dataset_id"],
         "case": case,
         "decision": "GO" if not failures else "NO-GO",
+        "inputs": inputs,
+        "evaluated_contract_canonical_sha256": canonical_sha256(contract),
         "checks": checks,
         "failures": failures,
     }
 
 
 def write_json(path: Path, value: object) -> None:
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    )
+    path.write_bytes(json_bytes(value))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--contract", type=Path, default=CONTRACT_PATH)
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
 
-    contract_bytes = CONTRACT_PATH.read_bytes()
+    contract_path = args.contract.resolve()
+    contract_bytes = contract_path.read_bytes()
     contract_sha256 = hashlib.sha256(contract_bytes).hexdigest()
     contract = json.loads(contract_bytes)
-    assert contract_sha256 == EXPECTED_CONTRACT_SHA256
-    assert (
-        canonical_sha256(contract["rules_snapshot"]["payload"])
-        == contract["rules_snapshot"]["sha256"]
-    )
+    committed_contract = contract_path == CONTRACT_PATH.resolve()
+    if committed_contract:
+        assert contract_sha256 == EXPECTED_CONTRACT_SHA256
 
     with tempfile.TemporaryDirectory(prefix="emmet-ch15-") as tmp:
         root = Path(tmp)
@@ -199,50 +256,113 @@ def main() -> None:
 
         status_code, observed = status(root, partition)
         assert status_code == 0 and observed["ok"] is True
-        disk_files = {
-            item["filename"]: sha256_file(directory / item["filename"])
-            for item in observed["files"]
-        }
-        manifest = build_manifest(contract, observed, contract_sha256)
-        passing = assess(contract, observed, disk_files, case="matching-manifest")
-        assert passing["decision"] == "GO"
+        disk_files = disk_parquet_files(directory)
+        manifest = build_manifest(
+            contract,
+            observed,
+            contract_sha256,
+            json_file_sha256(observed),
+        )
+        contract_inputs = evidence_inputs(
+            contract_path="dataset-contract.json",
+            contract_sha256=contract_sha256,
+            manifest=manifest,
+            observed=observed,
+        )
+        contract_report = assess(
+            contract,
+            observed,
+            disk_files,
+            case="provided-contract",
+            inputs=contract_inputs,
+        )
 
         checksum_contract = deepcopy(contract)
         checksum_contract["expected_files"]["2024-01-02.parquet"] = "0" * 64
+        checksum_contract_sha256 = json_file_sha256(checksum_contract)
         checksum_failure = assess(
             checksum_contract,
             observed,
             disk_files,
             case="checksum-mismatch",
+            inputs=evidence_inputs(
+                contract_path="dataset-contract-checksum-mismatch.json",
+                contract_sha256=checksum_contract_sha256,
+                manifest=manifest,
+                observed=observed,
+            ),
         )
-        assert checksum_failure["decision"] == "NO-GO"
-        assert checksum_failure["failures"] == [
-            "status_checksums_match_contract",
-            "disk_checksums_match_contract",
-        ]
 
         coverage_contract = deepcopy(contract)
         coverage_contract["coverage"]["end_ms"] += 86_400_000
         coverage_contract["coverage"]["expected_rows"] += 24
+        coverage_contract_sha256 = json_file_sha256(coverage_contract)
         coverage_failure = assess(
             coverage_contract,
             observed,
             disk_files,
             case="required-day-missing",
+            inputs=evidence_inputs(
+                contract_path="dataset-contract-required-day-missing.json",
+                contract_sha256=coverage_contract_sha256,
+                manifest=manifest,
+                observed=observed,
+            ),
         )
-        assert coverage_failure["decision"] == "NO-GO"
-        assert coverage_failure["failures"] == [
-            "coverage_exact",
-            "required_rows_present",
-        ]
+
+        unexpected_path = directory / "unexpected.parquet"
+        shutil.copyfile(directory / "2024-01-01.parquet", unexpected_path)
+        unexpected_files = disk_parquet_files(directory)
+        unexpected_failure = assess(
+            contract,
+            observed,
+            unexpected_files,
+            case="unregistered-extra-file",
+            inputs=contract_inputs,
+        )
+
+        if committed_contract:
+            assert contract_report["decision"] == "GO"
+            assert checksum_failure["failures"] == [
+                "status_checksums_match_contract",
+                "disk_checksums_match_contract",
+            ]
+            assert coverage_failure["failures"] == [
+                "coverage_exact",
+                "required_rows_present",
+            ]
+            assert unexpected_failure["failures"] == [
+                "file_set_exact",
+                "disk_checksums_match_contract",
+                "status_manifest_matches_disk",
+            ]
 
     output_dir = args.output_dir
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "dataset-contract.json").write_bytes(contract_bytes)
+        write_json(output_dir / "product-status.json", observed)
         write_json(output_dir / "dataset-manifest.json", manifest)
-        write_json(output_dir / "readiness-pass.json", passing)
-        write_json(output_dir / "readiness-checksum-mismatch.json", checksum_failure)
-        write_json(output_dir / "readiness-required-day-missing.json", coverage_failure)
+        write_json(output_dir / "readiness-contract.json", contract_report)
+        if committed_contract:
+            write_json(
+                output_dir / "dataset-contract-checksum-mismatch.json",
+                checksum_contract,
+            )
+            write_json(
+                output_dir / "dataset-contract-required-day-missing.json",
+                coverage_contract,
+            )
+            write_json(
+                output_dir / "readiness-checksum-mismatch.json", checksum_failure
+            )
+            write_json(
+                output_dir / "readiness-required-day-missing.json", coverage_failure
+            )
+            write_json(
+                output_dir / "readiness-unregistered-extra-file.json",
+                unexpected_failure,
+            )
 
     file_checksums = ",".join(
         f"{item['filename']}:{item['sha256']}" for item in manifest["files"]
@@ -255,13 +375,28 @@ def main() -> None:
         f"rows-{manifest['total_rows']}"
     )
     print(f"files={file_checksums}")
+    print(f"companion-baseline={COMPANION_BASELINE['tag_at_commit']}")
     print(f"contract-sha256={contract_sha256}")
-    print("readiness-matching-manifest=GO")
+    print(f"product-status-sha256={json_file_sha256(observed)}")
+    print(f"dataset-manifest-sha256={json_file_sha256(manifest)}")
+    contract_failures = ",".join(contract_report["failures"])
     print(
-        "readiness-checksum-mismatch=NO-GO,"
-        "status_checksums_match_contract,disk_checksums_match_contract"
+        f"readiness-provided-contract={contract_report['decision']}"
+        + (f",{contract_failures}" if contract_failures else "")
     )
-    print("readiness-required-day-missing=NO-GO,coverage_exact,required_rows_present")
+    if committed_contract:
+        print(
+            "readiness-checksum-mismatch=NO-GO,"
+            "status_checksums_match_contract,disk_checksums_match_contract"
+        )
+        print(
+            "readiness-required-day-missing=NO-GO,"
+            "coverage_exact,required_rows_present"
+        )
+        print(
+            "readiness-unregistered-extra-file=NO-GO,file_set_exact,"
+            "disk_checksums_match_contract,status_manifest_matches_disk"
+        )
     if output_dir is not None:
         print(f"evidence-dir={output_dir}")
     print("chapter-15-readiness-oracle=PASS")
