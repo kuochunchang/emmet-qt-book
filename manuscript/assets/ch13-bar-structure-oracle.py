@@ -16,7 +16,7 @@ import pyarrow as pa
 
 from quant.common.datasource import KlineFeed
 from quant.common.errors import DataIntegrityError
-from quant.common.models import Market
+from quant.common.models import ExecutionOpenEvent, Market, MarketEvent
 from quant.data.layout import DataPaths
 from quant.data.schema import KLINES_SCHEMA
 from quant.data.store import write_partition_file
@@ -94,10 +94,31 @@ def main() -> None:
             code, report = status(case_root, symbol, interval)
             results[name] = (code, report, case_table)
 
-        clean_code, clean, _ = results["clean"]
+        clean_code, clean, clean_table = results["clean"]
         assert clean_code == 0 and clean["ok"] is True
         assert clean["total_rows"] == 3
-        print("clean=status-0,rows-3,PASS")
+        clean_events = list(
+            KlineFeed(
+                [clean_table],
+                market=Market.FUTURES,
+                symbol=symbol,
+                interval=interval,
+            )
+        )
+        clean_open_times = [row["open_time"] for row in cases["clean"]]
+        assert [type(event) for event in clean_events] == [
+            ExecutionOpenEvent,
+            MarketEvent,
+            ExecutionOpenEvent,
+            MarketEvent,
+            ExecutionOpenEvent,
+            MarketEvent,
+        ]
+        assert [event.timestamp for event in clean_events[::2]] == clean_open_times
+        assert [event.timestamp for event in clean_events[1::2]] == [
+            open_time + fixture["interval_ms"] for open_time in clean_open_times
+        ]
+        print("clean=status-0,feed-events-6,PASS")
 
         gap_code, gap, _ = results["gap"]
         assert gap_code == 2 and gap["ok"] is False
