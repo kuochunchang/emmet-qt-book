@@ -236,6 +236,76 @@ revalidation_triggers = [
 ]
 
 [[records]]
+id = "ch13-v030-bar-structural-quality"
+batch = "W1"
+document = "manuscript/chapters/13-bar-structural-quality.md"
+chapter = "缺口、重複、亂序與非法 OHLC"
+claim = "v0.3.0 的 quant-data status 會以退出 2 拒絕固定 K 線的缺口、重複與非法 OHLC；因 K 線 status 會 canonical sort 而不能證明原始列序，本章另以已發布 KlineFeed 拒絕倒退 open_time，兩道閘門任一失敗都 no-go。"
+content_state = "可操作"
+data_checksums = [
+  "ch13-bar-structure-cases=sha256:0a03e8e8c989e280c3db0f7c55893d063801634bb8509e8f3a285f445ada41da",
+]
+data_checksum_note = "checksum 涵蓋隨書保存的固定教學 JSON，內含乾淨、缺口、重複、亂序與非法 OHLC 五組案例；它不是外部市場下載或 dataset manifest。"
+formal_entrypoints = [
+  "quant-data status",
+  "quant.common.datasource.KlineFeed",
+]
+schemas = [
+  "quant.data.status.DataStatus",
+  "quant.data.validate.ValidationReport",
+  "quant.common.models.Bar",
+]
+interface_note = "正式 status 保護分區集合、OHLC 與 checksum；已發布 KlineFeed 依原始 table 列序拒絕非嚴格遞增 open_time。章內 helper 只建固定暫存分區並呼叫這兩個入口，不實作修復或第二套驗證邏輯。"
+evidence_refs = [
+  "book:manuscript/chapters/13-bar-structural-quality.md",
+  "book:manuscript/assets/ch13-bar-structure-cases.json",
+  "book:manuscript/assets/ch13-bar-structure-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/cli/data.py",
+  "repo:emmet-qt-bt1:src/quant/data/status.py",
+  "repo:emmet-qt-bt1:src/quant/data/pipelines.py",
+  "repo:emmet-qt-bt1:src/quant/data/validate.py",
+  "repo:emmet-qt-bt1:src/quant/common/datasource/feeds.py",
+  "repo:emmet-qt-bt1:tests/unit/test_data_validate.py",
+  "repo:emmet-qt-bt1:tests/unit/test_data_status.py",
+  "repo:emmet-qt-bt1:tests/unit/test_cli_data.py",
+  "repo:emmet-qt-bt1:tests/unit/test_datasource_feeds.py",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run pytest tests/unit/test_data_validate.py tests/unit/test_data_status.py tests/unit/test_cli_data.py tests/unit/test_datasource_feeds.py -q",
+  "(cd \"$BOOK_DIR\" && sha256sum manuscript/assets/ch13-bar-structure-cases.json)",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch13-bar-structure-oracle.py\"",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "53 passed",
+  "clean=status-0,rows-3,PASS",
+  "gap=status-2,missing-1,FAIL-CLOSED",
+  "duplicate=status-2,ts-1704070800000,FAIL-CLOSED",
+  "invalid-ohlc=status-2,ts-1704070800000,FAIL-CLOSED",
+  "out-of-order=status-0,INSUFFICIENT",
+  "out-of-order-feed=FAIL-CLOSED",
+  "fixture-sha256=0a03e8e8c989e280c3db0f7c55893d063801634bb8509e8f3a285f445ada41da",
+  "chapter-13-structure-oracle=PASS",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；四組資料／CLI／datasource 測試 53 passed；固定 JSON checksum 相符；乾淨案例 status 退出 0，缺口、重複與非法 OHLC 退出 2；亂序案例的 status 綠燈明示不足，KlineFeed 依原始列序 fail closed。"
+known_differences = [
+  "固定 JSON 與 helper 建立的暫存 Parquet 是教學資料，不支持外部市場品質、下載成功或 readiness 宣稱。",
+  "v0.3.0 K 線 status 先依 open_time 排序，order_violations 空陣列不能支持原始列序通過；本章以 KlineFeed 補足消費邊界，但不宣稱 status 已有該 finding。",
+  "本章只偵測並拒絕，不執行自動排序、補值、去重、OHLC 夾值、PIT universe、dataset manifest 或 readiness 報告。",
+]
+verified_on = "2026-07-16"
+revalidation_triggers = [
+  "quant-data status 退出碼、JSON finding、canonical sort 或 manifest／checksum 語義改變",
+  "KlineFeed 的 open_time 嚴格遞增、Bar OHLC 或 DataIntegrityError 契約改變",
+  "固定 JSON、helper、時間戳、OHLC 值、checksum、PASS markers 或 fail-closed 決定改變",
+  "配套基線 tag／commit 或 Chapter 13 內容狀態改變",
+]
+
+[[records]]
 id = "setup-v030-tag-worktree"
 batch = "W1"
 document = "manuscript/front-matter/setup.md"
