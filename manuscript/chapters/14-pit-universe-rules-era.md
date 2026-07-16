@@ -46,13 +46,13 @@
 Point-in-time（PIT）不是「資料帶日期」而已，而是每個決定只能使用當時已成立且有
 證據支持的集合。`v0.3.0` 的存活判據是：
 
-\[
+\\[
 \mathrm{onboard\_ts} \le \mathrm{as\_of}
 \quad\land\quad
 (\mathrm{delist\_ts}=\mathrm{None}
 \quad\lor\quad
 \mathrm{delist\_ts} > \mathrm{as\_of})
-\]
+\\]
 
 因此，目前狀態為 `DELISTED` 的標的，在 `delist_ts` 之前仍可出現在歷史 universe；
 反過來，目前為 `TRADING` 的標的，在 `onboard_ts` 之前不能出現。`SETTLING` 在本版的
