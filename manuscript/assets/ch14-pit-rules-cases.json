@@ -1,0 +1,136 @@
+{
+  "market": "futures",
+  "research_as_of": 1623715200000,
+  "current_as_of": 1704067200000,
+  "expected_rules_snapshot_ts": 1622505600000,
+  "lifecycle_rows": [
+    {
+      "symbol": "BTCUSDT",
+      "onboard_ts": 1546300800000,
+      "settle_ts": null,
+      "delist_announce_ts": null,
+      "delist_ts": null,
+      "status": "TRADING",
+      "raw_status": "TRADING",
+      "first_seen_ts": 1546300800000,
+      "last_seen_ts": 1704067200000,
+      "source": "manual"
+    },
+    {
+      "symbol": "OLDUSDT",
+      "onboard_ts": 1577836800000,
+      "settle_ts": 1652313600000,
+      "delist_announce_ts": 1652313600000,
+      "delist_ts": 1652313600000,
+      "status": "DELISTED",
+      "raw_status": "DELISTED",
+      "first_seen_ts": 1577836800000,
+      "last_seen_ts": 1652313600000,
+      "source": "manual"
+    },
+    {
+      "symbol": "NEWUSDT",
+      "onboard_ts": 1672531200000,
+      "settle_ts": null,
+      "delist_announce_ts": null,
+      "delist_ts": null,
+      "status": "TRADING",
+      "raw_status": "TRADING",
+      "first_seen_ts": 1672531200000,
+      "last_seen_ts": 1704067200000,
+      "source": "manual"
+    }
+  ],
+  "insufficient_evidence": {
+    "symbol": "BTCUSDT",
+    "onboard_ts": 1546300800000,
+    "first_snapshot_ts": 1767225600000,
+    "query_as_of": 1623715200000
+  },
+  "rule_snapshots": {
+    "historical": [
+      {
+        "snapshot_ts": 1622505600000,
+        "market": "futures",
+        "symbol": "BTCUSDT",
+        "base_asset": "BTC",
+        "quote_asset": "USDT",
+        "margin_asset": "USDT",
+        "status": "TRADING",
+        "filters": {
+          "tick_size": "0.10",
+          "price_min": "0.10",
+          "price_max": "1000000",
+          "step_size": "0.001",
+          "qty_min": "0.001",
+          "qty_max": "1000",
+          "market_step_size": "0.001",
+          "min_notional": "5",
+          "max_num_orders": 200
+        }
+      },
+      {
+        "snapshot_ts": 1622505600000,
+        "market": "futures",
+        "symbol": "OLDUSDT",
+        "base_asset": "OLD",
+        "quote_asset": "USDT",
+        "margin_asset": "USDT",
+        "status": "TRADING",
+        "filters": {
+          "tick_size": "0.01",
+          "price_min": "0.01",
+          "price_max": "100000",
+          "step_size": "1",
+          "qty_min": "1",
+          "qty_max": "100000",
+          "market_step_size": "1",
+          "min_notional": "5",
+          "max_num_orders": 100
+        }
+      }
+    ],
+    "future": [
+      {
+        "snapshot_ts": 1704067200000,
+        "market": "futures",
+        "symbol": "BTCUSDT",
+        "base_asset": "BTC",
+        "quote_asset": "USDT",
+        "margin_asset": "USDT",
+        "status": "TRADING",
+        "filters": {
+          "tick_size": "0.10",
+          "price_min": "0.10",
+          "price_max": "2000000",
+          "step_size": "0.001",
+          "qty_min": "0.001",
+          "qty_max": "1000",
+          "market_step_size": "0.001",
+          "min_notional": "100",
+          "max_num_orders": 200
+        }
+      },
+      {
+        "snapshot_ts": 1704067200000,
+        "market": "futures",
+        "symbol": "OLDUSDT",
+        "base_asset": "OLD",
+        "quote_asset": "USDT",
+        "margin_asset": "USDT",
+        "status": "DELISTED",
+        "filters": {
+          "tick_size": "0.01",
+          "price_min": "0.01",
+          "price_max": "100000",
+          "step_size": "1",
+          "qty_min": "1",
+          "qty_max": "100000",
+          "market_step_size": "1",
+          "min_notional": "5",
+          "max_num_orders": 100
+        }
+      }
+    ]
+  }
+}

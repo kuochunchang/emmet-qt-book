@@ -307,6 +307,77 @@ revalidation_triggers = [
 ]
 
 [[records]]
+id = "ch14-v030-pit-universe-rules-era"
+batch = "W1"
+document = "manuscript/chapters/14-pit-universe-rules-era.md"
+chapter = "歷史當下的市場：PIT universe、生命週期與規則快照"
+claim = "v0.3.0 的 point_in_time_universe 依上架／下架時點重建固定 2021 universe 並揭露證據鏈 warning；同一固定案例以 RulesRepository 核對契約指定 snapshot_ts，拒絕目前存活清單回填、證據未覆蓋及未來規則快照。"
+content_state = "可操作"
+data_checksums = [
+  "ch14-pit-rules-cases=sha256:271c20be5d4f4455dfbf6ab8b783d28d3aec17eef8ae4edd1ad4848f1b270401",
+]
+data_checksum_note = "checksum 涵蓋隨書保存的虛構生命週期列與兩個固定規則時代；它不是 Binance 下載、原始 exchangeInfo snapshot 或 dataset manifest。"
+formal_entrypoints = [
+  "quant.data.lifecycle.LifecycleStore.import_rows",
+  "quant.data.lifecycle.LifecycleStore.upsert_from_snapshot",
+  "quant.data.universe.point_in_time_universe",
+  "quant.common.rules.RulesRepository.load_symbol_rules",
+]
+schemas = [
+  "quant.data.lifecycle.LifecycleRow",
+  "quant.data.universe.UniverseResult",
+  "quant.common.rules.filters.SymbolRules",
+]
+interface_note = "正式 LifecycleStore／PIT API 提供生命週期集合與 survivorship_warning，RulesRepository 驗證固定規則檔 schema、身分與 snapshot_ts；把 warning、目前清單差異及未來規則升級為 no-go 是章內資料契約，不冒充產品已有歷史規則選擇器。"
+evidence_refs = [
+  "book:manuscript/chapters/14-pit-universe-rules-era.md",
+  "book:manuscript/assets/ch14-pit-rules-cases.json",
+  "book:manuscript/assets/ch14-pit-rules-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/data/lifecycle.py",
+  "repo:emmet-qt-bt1:src/quant/data/universe.py",
+  "repo:emmet-qt-bt1:src/quant/common/rules/repository.py",
+  "repo:emmet-qt-bt1:tests/unit/test_data_lifecycle.py",
+  "repo:emmet-qt-bt1:tests/unit/test_data_universe.py",
+  "repo:emmet-qt-bt1:tests/integration/test_it2_pipeline_models.py",
+  "repo:emmet-qt-bt1:docs/design/step-2-data-pipeline.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run pytest tests/unit/test_data_universe.py tests/unit/test_data_lifecycle.py tests/integration/test_it2_pipeline_models.py -q",
+  "(cd \"$BOOK_DIR\" && sha256sum manuscript/assets/ch14-pit-rules-cases.json)",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch14-pit-rules-oracle.py\"",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "52 passed",
+  "pit-2021=BTCUSDT,OLDUSDT,warning-false,PASS",
+  "current-2024=BTCUSDT,NEWUSDT",
+  "current-survivors-for-2021=MISMATCH,FAIL-CLOSED",
+  "pre-evidence-universe=warning-true,FAIL-CLOSED",
+  "rules-2021=snapshot-1622505600000,PASS",
+  "future-rules-for-2021=snapshot-1704067200000,FAIL-CLOSED",
+  "fixture-sha256=271c20be5d4f4455dfbf6ab8b783d28d3aec17eef8ae4edd1ad4848f1b270401",
+  "chapter-14-pit-rules-oracle=PASS",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；lifecycle／PIT／IT-2 測試 52 passed；固定 JSON checksum 相符；2021 PIT universe 為 BTCUSDT、OLDUSDT，2024 universe 為 BTCUSDT、NEWUSDT；目前清單回填、首見證據晚於研究時點及 2024 規則套用 2021 三種案例均 fail closed。"
+known_differences = [
+  "固定 JSON、虛構標的、manual rows 與規則數值是教學輸入，不支持外部市場歷史、下載成功或 readiness 宣稱。",
+  "v0.3.0 的 survivorship_warning 是回傳事實，不自動阻止消費者；本章資料契約明示 warning 即 no-go。",
+  "PIT 查詢在 delist_ts 前把 SETTLING 算入存活；需要更細過渡窗口時仍須消費 settle_ts、delist_announce_ts 與狀態。",
+  "採集器保留原始 gzip snapshot 與登記，但正規化規則路徑是最新快照語義；本章沒有宣稱歷史規則自動選擇器、dataset manifest 或 readiness 報告。",
+]
+verified_on = "2026-07-16"
+revalidation_triggers = [
+  "LifecycleRow、存活判據、first_seen 證據鏈或 survivorship_warning 語義改變",
+  "RulesRepository 的身分、數值字串、snapshot_ts 或缺檔 fail-closed 契約改變",
+  "固定 JSON、helper、checksum、PIT 集合、規則版本、PASS markers 或 no-go 決定改變",
+  "配套基線 tag／commit 或 Chapter 14 內容狀態改變",
+]
+
+[[records]]
 id = "setup-v030-tag-worktree"
 batch = "W1"
 document = "manuscript/front-matter/setup.md"
