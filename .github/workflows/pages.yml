@@ -38,6 +38,7 @@ jobs:
         with:
           repository: kuochunchang/emmet-qt-bt1
           ref: c999965e5cc923281541409cda9502beb93b8a60
+          fetch-depth: 0
           path: _companion/emmet-qt-bt1-v0.3.0
           token: ${{ secrets.EMMET_QT_BT1_READ_TOKEN }}
           persist-credentials: false

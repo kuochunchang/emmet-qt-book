@@ -21,6 +21,7 @@ class PagesWorkflowContractTests(unittest.TestCase):
     def test_companion_access_is_read_only_and_commit_scoped(self) -> None:
         self.assertIn("repository: kuochunchang/emmet-qt-bt1", self.workflow)
         self.assertIn(f"ref: {COMPANION_COMMIT}", self.workflow)
+        self.assertIn("fetch-depth: 0", self.workflow)
         self.assertIn("EMMET_QT_BT1_READ_TOKEN", self.workflow)
         self.assertGreaterEqual(self.workflow.count("persist-credentials: false"), 2)
 
