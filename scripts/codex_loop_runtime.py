@@ -214,7 +214,7 @@ def operator_pane_status(
     if health == "draining":
         return "換代：等待目前 iteration 結束"
     if health == "rotating":
-        return "換代：同步 trusted runners"
+        return "換代：同步 control／runners"
     if health == "stalled":
         return f"停滯：{affected}" + (f"／{reference}" if reference else "")
     if health == "blocked":
@@ -2005,10 +2005,11 @@ def control_rotation_status(
             )
         ),
         "next": (
-            "目前 iteration 結束後自動同步 trusted runners、執行 preflight "
+            "目前 iteration 結束後自動同步 control worktree 與 trusted runners、"
+            "執行 preflight "
             "並重建 launcher-owned tmux session。"
             if draining
-            else "detached rotator 會驗證 session ownership、同步 runners、"
+            else "detached rotator 會驗證 session ownership、同步 control／runners、"
             "執行 preflight 並從 GitHub durable state 恢復。"
         ),
         "attention": ", ".join(changes),

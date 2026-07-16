@@ -171,6 +171,10 @@ durable state，不得各自建立狀態機。要點：
   trusted runner 載入；只有非 control paths 前進時，長駐 runner 的 detached HEAD
   可暫時落後，下一個 role iteration 仍須 fetch 並以最新 main 建立 task／candidate。
   候選 branch／PR 必須在另一 task／candidate worktree 處理，不得成為下一輪控制來源。
+- `tmux start/restart` 從一般 checkout 呼叫時只得作為 bootstrap；真正的 lifecycle
+  launcher 必須重新載入同 repository、乾淨、detached 且對齊最新 `origin/main` 的
+  dedicated `*-loop-control` worktree。主要 checkout、task／candidate worktree 與三個
+  role runner 都不得取代這個 launcher control source。
 - Trusted runner preflight 已驗證、並由 client 注入的 `AGENTS.md` 算本輪「開工前必查」
   的讀取；role 不得再用工具輸出整份文件。Curriculum 只讀 active-gate 節，authoring
   guide 與對應 Issue／PR 各讀一次；只有協定歧義才開啟 `docs/agent-loop.md` 對應段落。
@@ -183,9 +187,9 @@ durable state，不得各自建立狀態機。要點：
   command output，不影響操作者看到完整 Codex JSONL event stream。
 - Event manager 發現 `origin/main` 的 control inputs 改變時，必須停止派送新事件；
   有 child 時先 drain，idle 後只由 launcher-owned detached rotator 驗證 events
-  PID／lock、session ownership、乾淨 runners 與 same-repo，再同步三個 runners、
-  執行四項 preflight 並重建 session。換代失敗時 fail closed；不得由 role、候選
-  branch 或一般 no-progress alert 觸發 restart。
+  PID／lock、session ownership、乾淨 runners 與 same-repo，再同步 dedicated control
+  worktree 與三個 runners、執行四項 preflight 並重建 session。換代失敗時 fail
+  closed；不得由 role、候選 branch 或一般 no-progress alert 觸發 restart。
 - Gate 升級不在授權範圍：dispatcher 只彙整退出證據並通知使用者，transition
   仍依下節「Gate 升級」由使用者核准後執行。
 - 使用者可隨時在 Meta Issue #1 加 `loop:paused` label 暫停全部 agent。

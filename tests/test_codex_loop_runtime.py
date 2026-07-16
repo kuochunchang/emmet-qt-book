@@ -263,7 +263,7 @@ class ControlRotationTests(unittest.TestCase):
             operator_pane_status(draining),
         )
         self.assertEqual(
-            "換代：同步 trusted runners",
+            "換代：同步 control／runners",
             operator_pane_status(rotating),
         )
 
