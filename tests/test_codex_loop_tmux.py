@@ -68,6 +68,57 @@ class CodexLoopTmuxTests(unittest.TestCase):
         ):
             parser.parse_args(["--coder-profile", "not/a/profile"])
 
+    def test_automatic_profiles_prefer_role_then_shared_then_defaults(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            shared = home / "loop.config.toml"
+            shared.write_text('model = "shared"\n', encoding="utf-8")
+            reviewer = home / "loop-reviewer.config.toml"
+            reviewer.write_text('model = "reviewer"\n', encoding="utf-8")
+
+            with mock.patch.object(launcher, "codex_home", return_value=home):
+                self.assertEqual(
+                    "loop", launcher.discover_automatic_profile("coder")
+                )
+                self.assertEqual(
+                    "loop-reviewer",
+                    launcher.discover_automatic_profile("reviewer"),
+                )
+
+                options = launcher.parser().parse_args(
+                    ["restart", "--coder-profile", "explicit-coder"]
+                )
+                launcher.apply_automatic_role_profiles(options)
+
+            self.assertEqual("loop", options.dispatcher_profile)
+            self.assertEqual("explicit-coder", options.coder_profile)
+            self.assertEqual("loop-reviewer", options.reviewer_profile)
+
+            shared.unlink()
+            reviewer.unlink()
+            with mock.patch.object(launcher, "codex_home", return_value=home):
+                self.assertIsNone(
+                    launcher.discover_automatic_profile("coder")
+                )
+
+    def test_explicit_shared_profile_disables_automatic_discovery(self) -> None:
+        options = launcher.parser().parse_args(
+            ["restart", "--profile", "explicit-shared"]
+        )
+        with mock.patch.object(
+            launcher,
+            "discover_automatic_profile",
+            side_effect=AssertionError("automatic discovery must not run"),
+        ):
+            launcher.apply_automatic_role_profiles(options)
+
+        self.assertEqual("explicit-shared", options.profile)
+        self.assertIsNone(options.dispatcher_profile)
+        self.assertIsNone(options.coder_profile)
+        self.assertIsNone(options.reviewer_profile)
+
     def test_runner_workdirs_are_dedicated_siblings(self) -> None:
         root = Path("/workspace/emmet-qt-book")
         self.assertEqual(
@@ -833,7 +884,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
             "profiles", launcher.codex_configuration_kind(profiles)
         )
         self.assertEqual("mixed", launcher.codex_configuration_kind(mixed))
-        self.assertEqual("gpt-5.6-terra", defaults["coder"]["model"])
+        self.assertEqual("gpt-5.6-sol", defaults["coder"]["model"])
+        self.assertEqual("high", defaults["coder"]["reasoning_effort"])
+        self.assertEqual("xhigh", defaults["reviewer"]["reasoning_effort"])
 
     def test_legacy_null_profile_session_is_not_misreported_as_defaults(
         self,

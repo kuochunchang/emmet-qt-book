@@ -31,13 +31,13 @@ ROLE_CODEX_DEFAULTS: dict[str, dict[str, str]] = {
         "model_verbosity": "low",
     },
     "coder": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "medium",
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high",
         "model_verbosity": "low",
     },
     "reviewer": {
         "model": "gpt-5.6-sol",
-        "model_reasoning_effort": "high",
+        "model_reasoning_effort": "xhigh",
         "model_verbosity": "low",
     },
 }

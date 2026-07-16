@@ -90,6 +90,26 @@ def resolve_role_profiles(
     }
 
 
+def discover_automatic_profile(role: str) -> str | None:
+    """Prefer a role profile, then the shared loop profile, when present."""
+
+    for profile in (f"loop-{role}", "loop"):
+        if (codex_home() / f"{profile}.config.toml").is_file():
+            return profile
+    return None
+
+
+def apply_automatic_role_profiles(options: argparse.Namespace) -> None:
+    """Fill only profile slots that were not selected explicitly."""
+
+    if options.profile is not None:
+        return
+    for role in adapter.ROLES:
+        attribute = f"{role}_profile"
+        if getattr(options, attribute) is None:
+            setattr(options, attribute, discover_automatic_profile(role))
+
+
 def common_role_profile(
     role_profiles: Mapping[str, str | None],
 ) -> str | None:
@@ -1732,6 +1752,7 @@ def parser() -> argparse.ArgumentParser:
 def main(arguments: Sequence[str] | None = None) -> int:
     raw_arguments = list(arguments) if arguments is not None else sys.argv[1:]
     options = parser().parse_args(raw_arguments)
+    apply_automatic_role_profiles(options)
     try:
         if (
             options.action in ("start", "restart")
