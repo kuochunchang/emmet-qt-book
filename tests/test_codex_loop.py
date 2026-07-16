@@ -422,6 +422,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "operator-alert",
             "operator-resolved",
             "operator-stall-reconciliation",
+            "emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA>",
+            "`awaiting-user`",
             "terminal bell",
             "不自動 restart component",
             "不啟動第四個 agent",
@@ -450,6 +452,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
                 "不構成新授權",
                 "loop:blocked",
                 "emmet-loop:dispatcher:alert:id=<ALERT_ID>:main=<MAIN_SHA>",
+                "emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA>",
+                "`awaiting-user`",
                 "不自行移除",
             ):
                 with self.subTest(path=path, required=required):
@@ -471,6 +475,7 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "不新增／移除 `loop:paused`",
             "`health`、`blocking`、`owner`",
             "`health=stalled`",
+            "`health=awaiting-user`",
             "operator-alert",
             "operator-resolved",
             "terminal bell",

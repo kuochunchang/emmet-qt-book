@@ -67,11 +67,16 @@ def loop_object(
 def snapshot(
     *,
     paused: bool = False,
+    main_sha: str | None = None,
+    gate_exit: dict[str, object] | None = None,
     issues: list[dict[str, object]] | None = None,
     pull_requests: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
         "paused": paused,
+        "main_sha": main_sha,
+        "gate_exit": gate_exit,
+        "meta_comments_truncated": False,
         "issues": issues or [],
         "pull_requests": pull_requests or [],
     }
@@ -145,6 +150,18 @@ class PaneTitleTests(unittest.TestCase):
                     "objects": [],
                 },
                 {"affected_role": "coder"},
+            ),
+        )
+
+    def test_awaiting_user_title_names_gate_transition(self) -> None:
+        self.assertEqual(
+            "等待使用者：gate transition",
+            operator_pane_status(
+                {
+                    "health": "awaiting-user",
+                    "owner": "user",
+                    "objects": [],
+                }
             ),
         )
 
@@ -258,6 +275,33 @@ class EventRoutingTests(unittest.TestCase):
     def test_empty_loop_wakes_dispatcher(self) -> None:
         self.assert_route(snapshot(), "dispatcher", "reconcile-or-dispatch")
 
+    def test_current_main_gate_exit_quiesces_empty_loop(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+        )
+
+        self.assertEqual([], classify_snapshot(state))
+
+    def test_stale_gate_exit_does_not_quiesce_empty_loop(self) -> None:
+        state = snapshot(
+            main_sha="b" * 40,
+            gate_exit={"gate": "W1-G2", "main_sha": "a" * 40},
+        )
+
+        self.assert_route(state, "dispatcher", "reconcile-or-dispatch")
+
+    def test_current_gate_exit_does_not_mask_work_in_progress(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+            issues=[loop_object("issue", 3, "loop:queued")],
+        )
+
+        self.assert_route(state, "coder", "coding-work-available")
+
     def test_queued_or_coding_issue_wakes_coder(self) -> None:
         for label in ("loop:queued", "loop:coding"):
             with self.subTest(label=label):
@@ -308,11 +352,30 @@ class EventRoutingTests(unittest.TestCase):
         self.assertTrue(all(item["action"] == "paused" for item in decisions))
 
     def test_graphql_payload_is_normalized_without_meta_as_work(self) -> None:
+        main_sha = "a" * 40
         payload = {
             "data": {
                 "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": main_sha},
+                    },
                     "meta": {
-                        "labels": {"nodes": [{"name": "loop:paused"}]}
+                        "labels": {"nodes": [{"name": "loop:paused"}]},
+                        "comments": {
+                            "nodes": [
+                                {
+                                    "body": (
+                                        "<!-- emmet-loop:dispatcher:gate-exit:"
+                                        f"W1-G2:main={main_sha} -->"
+                                    ),
+                                    "createdAt": "2026-07-15T00:00:00Z",
+                                    "url": "https://example.test/comment",
+                                    "viewerDidAuthor": True,
+                                }
+                            ],
+                            "pageInfo": {"hasPreviousPage": True},
+                        },
                     }
                 },
                 "loopObjects": {
@@ -337,7 +400,58 @@ class EventRoutingTests(unittest.TestCase):
         }
         normalized = normalize_snapshot(payload)
         self.assertTrue(normalized["paused"])
+        self.assertEqual(main_sha, normalized["main_sha"])
+        self.assertEqual("W1-G2", normalized["gate_exit"]["gate"])
+        self.assertTrue(normalized["meta_comments_truncated"])
         self.assertEqual([3], [item["number"] for item in normalized["issues"]])
+
+    def test_normalization_ignores_gate_exit_for_stale_main(self) -> None:
+        current_main = "b" * 40
+        payload = {
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": current_main},
+                    },
+                    "meta": {
+                        "labels": {"nodes": []},
+                        "comments": {
+                            "nodes": [
+                                {
+                                    "body": (
+                                        "<!-- emmet-loop:dispatcher:gate-exit:"
+                                        f"W1-G2:main={'a' * 40} -->"
+                                    ),
+                                    "createdAt": "2026-07-15T00:00:00Z",
+                                    "url": "https://example.test/stale",
+                                    "viewerDidAuthor": True,
+                                },
+                                {
+                                    "body": (
+                                        "<!-- emmet-loop:dispatcher:gate-exit:"
+                                        f"W1-G2:main={current_main} -->"
+                                    ),
+                                    "createdAt": "2026-07-15T00:01:00Z",
+                                    "url": "https://example.test/untrusted",
+                                    "viewerDidAuthor": False,
+                                }
+                            ],
+                            "pageInfo": {"hasPreviousPage": False},
+                        },
+                    },
+                },
+                "loopObjects": {"nodes": []},
+            }
+        }
+
+        normalized = normalize_snapshot(payload)
+
+        self.assertEqual(current_main, normalized["main_sha"])
+        self.assertIsNone(normalized["gate_exit"])
+        self.assert_route(
+            normalized, "dispatcher", "reconcile-or-dispatch"
+        )
 
     def test_github_poll_uses_supported_multi_label_or_qualifier(self) -> None:
         payload = {
@@ -370,6 +484,11 @@ class EventRoutingTests(unittest.TestCase):
             '"loop:needs-review","loop:queued"',
             search_argument,
         )
+        query_argument = next(
+            argument for argument in command if argument.startswith("query=")
+        )
+        self.assertIn("defaultBranchRef", query_argument)
+        self.assertIn("comments(last: 100)", query_argument)
 
     def test_busy_child_serializes_regular_role_wakes(self) -> None:
         decisions = select_poll_decisions(
@@ -427,6 +546,29 @@ class EventRoutingTests(unittest.TestCase):
 
 
 class OperatorStatusTests(unittest.TestCase):
+    def test_current_gate_exit_waits_for_user_without_alert(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+        )
+
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("awaiting-user", status["health"])
+        self.assertFalse(status["blocking"])
+        self.assertEqual("user", status["owner"])
+        self.assertEqual(
+            "gate-transition-awaiting-user", status["reason"]
+        )
+        self.assertIn("W1-G2", status["current"])
+        self.assertIn(main_sha, status["current"])
+        self.assertIsNone(build_operator_alert(status))
+
     def test_queued_issue_explains_owner_and_next_transition(self) -> None:
         state = snapshot(
             issues=[loop_object("issue", 3, "loop:queued")]
@@ -584,7 +726,7 @@ class OperatorStatusTests(unittest.TestCase):
 
         self.assertIsNone(stalled)
 
-    def test_empty_dispatcher_no_op_is_not_reported_as_stalled(self) -> None:
+    def test_empty_dispatcher_no_op_without_checkpoint_is_stalled(self) -> None:
         state = snapshot()
         decision = classify_snapshot(state)[0]
 
@@ -606,7 +748,20 @@ class OperatorStatusTests(unittest.TestCase):
             },
         )
 
-        self.assertIsNone(stalled)
+        self.assertIsNotNone(stalled)
+
+    def test_gate_exit_checkpoint_changes_workflow_fingerprint(self) -> None:
+        main_sha = "a" * 40
+        before = snapshot(main_sha=main_sha)
+        after = snapshot(
+            main_sha=main_sha,
+            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+        )
+
+        self.assertNotEqual(
+            workflow_state_fingerprint(before),
+            workflow_state_fingerprint(after),
+        )
 
     def test_mergeability_only_update_does_not_hide_stall(self) -> None:
         issue = loop_object("issue", 3, "loop:coding")
@@ -1067,6 +1222,77 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('"next":', manager.stdout)
         self.assertEqual(0, agent.returncode, agent_stderr)
         self.assertIn("fake-visible-event", agent_stdout)
+
+    def test_event_manager_does_not_wake_for_current_gate_exit(self) -> None:
+        main_sha = subprocess.run(
+            ["git", "-C", str(self.worktree), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        payload = {
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": main_sha},
+                    },
+                    "meta": {
+                        "labels": {"nodes": []},
+                        "comments": {
+                            "nodes": [
+                                {
+                                    "body": (
+                                        "<!-- emmet-loop:dispatcher:gate-exit:"
+                                        f"W1-G2:main={main_sha} -->"
+                                    ),
+                                    "createdAt": "2026-07-15T00:00:00Z",
+                                    "url": "https://example.test/gate-exit",
+                                    "viewerDidAuthor": True,
+                                }
+                            ],
+                            "pageInfo": {"hasPreviousPage": False},
+                        },
+                    },
+                },
+                "loopObjects": {"nodes": []},
+            }
+        }
+        environment = os.environ.copy()
+        environment["FAKE_GH_PAYLOAD"] = json.dumps(payload)
+
+        manager = subprocess.run(
+            [
+                "python3",
+                str(self.worktree / "scripts" / "codex_loop_runtime.py"),
+                "events",
+                "--workdir",
+                str(self.worktree),
+                "--gh-bin",
+                str(self.fake_gh),
+                "--repo",
+                "test/repo",
+                "--runtime-dir",
+                str(self.runtime_dir),
+                "--once",
+            ],
+            cwd=self.worktree,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+
+        self.assertEqual(0, manager.returncode, manager.stderr)
+        self.assertNotIn('"result": "notified"', manager.stdout)
+        self.assertIn('"health": "awaiting-user"', manager.stdout)
+        self.assertIn(
+            '"reason": "gate-transition-awaiting-user"',
+            manager.stdout,
+        )
+        self.assertIn('"decisions": []', manager.stdout)
+        self.assertFalse(self.capture.exists())
 
     def test_event_manager_hands_off_idle_control_drift_without_delivery(
         self,
