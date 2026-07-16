@@ -7,6 +7,51 @@ schema_version = 2
 W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
 
 [[records]]
+id = "ch10-question-data-contract-time-boundaries"
+batch = "W1"
+document = "manuscript/chapters/10-question-to-data-contract.md"
+chapter = "先問問題，再決定需要什麼資料"
+claim = "固定研究問題可逐項核對訊號、撮合、會計與風控資料需求，以及 event_time <= arrival_time <= available_time <= order_time < fill_time；資料不可見或不完整時，前視偏誤案例會 fail closed。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本項只使用章內固定時間表與資料契約，不載入或保存市場資料集。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項是研究資料契約與時間判讀 oracle，不呼叫 Emmet 產品入口、交易所或未發布 CLI。"
+evidence_refs = [
+  "book:manuscript/chapters/10-question-to-data-contract.md",
+  "repo:emmet-qt-bt1:src/quant/data/schema.py",
+  "repo:emmet-qt-bt1:src/quant/data/validate.py",
+  "repo:emmet-qt-bt1:docs/design/step-2-data-pipeline.md",
+]
+verification_commands = [
+  "uv run python -c 'from datetime import datetime as T; a=lambda s:T.fromisoformat(s); good=(a(\"2026-01-01T11:00:00\"),a(\"2026-01-01T11:00:03\"),a(\"2026-01-01T11:00:04\"),a(\"2026-01-01T11:00:05\"),a(\"2026-01-01T11:00:06\")); assert good[0] <= good[1] <= good[2] <= good[3] < good[4]; lookahead=(good[0],good[1],good[2],good[0],good[0]); assert not (lookahead[0] <= lookahead[1] <= lookahead[2] <= lookahead[3] < lookahead[4]); missing=(good[0],None,None,good[3],None); assert any(v is None for v in missing); print(\"data-contract=PASS\"); print(\"lookahead=FAIL-CLOSED\"); print(\"missing-data=FAIL-CLOSED\")'",
+  "git -C ../emmet-qt-bt1-v0.3.0 grep -n -F 'open_time' HEAD -- src/quant/data/schema.py docs/design/step-2-data-pipeline.md",
+  "git -C ../emmet-qt-bt1-v0.3.0 grep -n -F 'close_time = open_time + interval_to_ms(interval)' HEAD -- docs/design/step-2-data-pipeline.md",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "data-contract=PASS",
+  "lookahead=FAIL-CLOSED",
+  "missing-data=FAIL-CLOSED",
+  "open_time",
+  "close_time = open_time + interval_to_ms(interval)",
+]
+result = "pass"
+observed = "固定案例的合法時間序通過；order 早於 available 與 arrival／available 缺失均 fail closed；已發布資料設計列出 open_time 與由 interval 推導 close_time 的邊界。"
+known_differences = [
+  "本章固定時間與資料欄位是教學契約，不是即時市場資料、資料集 manifest、策略績效或可成交性事實。",
+  "v0.3.0 的資料套件與設計只支撐資料時間／模型邊界；本章不宣稱已發布完整研究引擎、資料 readiness 報告或 quant-data CLI。",
+]
+verified_on = "2026-07-16"
+revalidation_triggers = [
+  "章內研究問題、四類資料表、時間 oracle、PASS markers 或 fail-closed 決定改變",
+  "已發布資料 schema／驗證或 open_time／close_time 設計邊界改變",
+  "配套基線 tag／commit 或 Chapter 10 內容狀態改變",
+]
+
+[[records]]
 id = "setup-v030-tag-worktree"
 batch = "W1"
 document = "manuscript/front-matter/setup.md"
