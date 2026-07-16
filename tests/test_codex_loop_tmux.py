@@ -555,6 +555,78 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 profiles,
                 launcher.session_role_profiles("tmux", "test-loop"),
             )
+            self.assertEqual(
+                launcher.codex_role_configuration(profiles),
+                launcher.session_codex_configuration("tmux", "test-loop"),
+            )
+
+    def test_codex_configuration_distinguishes_defaults_profiles_and_legacy(
+        self,
+    ) -> None:
+        empty = {role: None for role in launcher.adapter.ROLES}
+        defaults = launcher.codex_role_configuration(empty)
+        legacy = launcher.codex_role_configuration(
+            empty, legacy_inherited=True
+        )
+        profiles = launcher.codex_role_configuration(
+            {role: f"loop-{role}" for role in launcher.adapter.ROLES}
+        )
+        mixed = launcher.codex_role_configuration(
+            {
+                "dispatcher": None,
+                "coder": "loop-coder",
+                "reviewer": None,
+            }
+        )
+
+        self.assertEqual(
+            "repo-defaults", launcher.codex_configuration_kind(defaults)
+        )
+        self.assertEqual(
+            "inherited", launcher.codex_configuration_kind(legacy)
+        )
+        self.assertEqual(
+            "profiles", launcher.codex_configuration_kind(profiles)
+        )
+        self.assertEqual("mixed", launcher.codex_configuration_kind(mixed))
+        self.assertEqual("gpt-5.6-terra", defaults["coder"]["model"])
+
+    def test_legacy_null_profile_session_is_not_misreported_as_defaults(
+        self,
+    ) -> None:
+        common_dir = Path("/repo/.git")
+        profiles = {role: None for role in launcher.adapter.ROLES}
+        with (
+            mock.patch.object(launcher, "session_exists", return_value=True),
+            mock.patch.object(
+                launcher, "session_marker", return_value=str(common_dir)
+            ),
+            mock.patch.object(
+                launcher, "session_role_profiles", return_value=profiles
+            ),
+            mock.patch.object(
+                launcher, "session_codex_configuration", return_value=None
+            ),
+            mock.patch.object(launcher, "active_components", return_value={}),
+            mock.patch.object(launcher, "runner_git_state", return_value={}),
+            mock.patch.object(launcher, "emit") as emit,
+        ):
+            launcher.status_report(
+                "tmux",
+                "test-loop",
+                common_dir,
+                launcher.runner_workdirs(Path("/repo")),
+                Path("/runtime"),
+                None,
+            )
+
+        fields = emit.call_args.kwargs
+        self.assertEqual("inherited", fields["codex_configuration"])
+        self.assertEqual("legacy-session", fields["codex_profile_source"])
+        self.assertEqual(
+            {"source": "inherited"},
+            fields["codex_role_configuration"]["dispatcher"],
+        )
 
     def test_failed_start_cleanup_stops_around_owned_session_removal(
         self,

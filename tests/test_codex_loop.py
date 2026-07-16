@@ -17,6 +17,7 @@ from scripts.codex_loop import (
     build_command,
     default_lock_dir,
     default_workdir,
+    role_execution_config,
     validate_workdir,
 )
 
@@ -174,6 +175,34 @@ class CodexLoopAdapterTests(unittest.TestCase):
         self.assertIn("Do not sleep", command[-1])
         self.assertNotIn("dangerously-bypass", joined)
         self.assertEqual(["--profile", "loop"], command[-3:-1])
+        self.assertNotIn("--model", command)
+        self.assertNotIn("model_reasoning_effort", joined)
+        self.assertNotIn("model_verbosity", joined)
+
+    def test_repo_defaults_bound_each_role_without_a_profile(self) -> None:
+        expected = {
+            "dispatcher": ("gpt-5.6-sol", "high"),
+            "coder": ("gpt-5.6-terra", "medium"),
+            "reviewer": ("gpt-5.6-sol", "high"),
+        }
+        for role, (model, effort) in expected.items():
+            with self.subTest(role=role):
+                config = role_execution_config(role)
+                command = build_command(
+                    role, Path(f"/tmp/{role}"), "/usr/bin/codex"
+                )
+                joined = " ".join(command)
+                self.assertEqual(model, config["model"])
+                self.assertEqual(effort, config["model_reasoning_effort"])
+                self.assertIn("--model", command)
+                self.assertIn(model, command)
+                self.assertIn(
+                    f'model_reasoning_effort="{effort}"', command
+                )
+                self.assertIn('model_verbosity="low"', command)
+                self.assertNotIn("--profile", command)
+                self.assertIn('approval_policy="on-request"', joined)
+                self.assertIn('approvals_reviewer="auto_review"', joined)
 
     def test_linked_worktrees_derive_the_same_lock_namespace(self) -> None:
         linked = self.base / "linked"
@@ -361,6 +390,13 @@ class CodexLoopAdapterTests(unittest.TestCase):
 
 
 class CodexLoopSkillContractTests(unittest.TestCase):
+    @staticmethod
+    def common_contract(path: Path) -> str:
+        text = path.read_text(encoding="utf-8")
+        start = "<!-- loop-common-contract:start -->"
+        end = "<!-- loop-common-contract:end -->"
+        return text.split(start, 1)[1].split(end, 1)[0].strip()
+
     def test_all_roles_are_explicit_one_shot_skills(self) -> None:
         for role in ("dispatcher", "coder", "reviewer"):
             with self.subTest(role=role):
@@ -416,7 +452,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "scripts/codex-loop",
             "不提供、安裝、enable 或 start 主機 unit",
             "./scripts/codex-loop tmux restart",
-            "Model 與 reasoning effort 不由 launcher 硬編碼",
+            "repo 受控的角色預設",
+            "bounded preflight",
             "`operator-status`",
             "no-durable-progress-after-iteration",
             "operator-alert",
@@ -439,6 +476,34 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         self.assertIn(".claude/skills/", agents)
         self.assertIn(".agents/skills/", agents)
         self.assertIn("不安裝或啟用主機 scheduler", agents)
+
+    def test_cross_client_roles_share_the_bounded_context_contract(self) -> None:
+        procedures = []
+        for role in ("dispatcher", "coder", "reviewer"):
+            codex = (
+                ROOT
+                / ".agents"
+                / "skills"
+                / f"emmet-loop-{role}"
+                / "SKILL.md"
+            )
+            claude = ROOT / ".claude" / "skills" / role / "SKILL.md"
+            for path in (codex, claude):
+                with self.subTest(path=path):
+                    contract = self.common_contract(path)
+                    for required in (
+                        "已注入",
+                        "不得再次輸出整份",
+                        "`AGENTS.md`",
+                        "bounded preflight",
+                        "不是授權",
+                        "mutation 前",
+                        "compact summary",
+                        "預設禁止完整 comments/history",
+                    ):
+                        self.assertIn(required, contract)
+                procedures.append(self.common_contract(path))
+        self.assertEqual(1, len(set(procedures)))
 
     def test_dispatcher_roles_define_idempotent_alert_recovery(self) -> None:
         for path in (

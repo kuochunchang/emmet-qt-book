@@ -7,18 +7,35 @@ description: "Execute exactly one independent reviewer iteration for the emmet-q
 
 審查一個 PR 後立即結束。不要 sleep、建立排程、改碼、commit、push、派工或合併。
 
+<!-- loop-common-contract:start -->
+## 共同低 token 安全契約
+
+1. Client 已注入 trusted runner 驗證過的 `AGENTS.md`，算本輪完整讀取；注入缺失或來源
+   不明就 fail closed，且不得再次輸出整份 `AGENTS.md`。
+2. `bounded preflight` 只縮小候選，不是授權或 durable state。直接鎖定其中 object；
+   `snapshot_incomplete` 本身阻斷；object truncation 只補 target 缺口，
+   `meta_comments_truncated` 只影響 gate-exit／舊 marker 查找。
+3. Active-gate 節、authoring guide、target Issue／PR 各只讀一次；skill 已是本角色協定投影。
+   只有歧義才讀 `docs/agent-loop.md` 對應段落；正常 role 不讀 operations runbook。
+4. mutation 前做一次 bounded live revalidation：pause、main、target labels，PR 再核對
+   head／base／draft／mergeability。只對缺口分頁；預設禁止完整 comments/history 與
+   all-issues 查詢。
+5. Mutation 結果不明才重查。成功只留 exit／test count／必要 hash 的 compact summary；
+   失敗才輸出 bounded diagnostics；結尾只輸出一個 compact summary。
+<!-- loop-common-contract:end -->
+
 ## 每輪前置檢查
 
-1. 先查 Meta Issue #1 的 `loop:paused`；存在就無副作用回報 paused 並結束。
+1. 先讀 `bounded preflight`；若已 paused 就無副作用回報 paused 並結束。只審 packet
+   指向的 PR；`snapshot_incomplete` 時不依部分資料裁決。
 2. 先 `git fetch origin main --prune --quiet`，記錄完整 `MAIN_SHA`，再從同一個
-   `origin/main` snapshot 讀治理文件。
-3. 完整讀取 [AGENTS.md](../../../AGENTS.md)、[loop 協定](../../../docs/agent-loop.md)、
-   [curriculum](../../../docs/curriculum.md)、
-   [authoring guide](../../../docs/authoring-guide.md) 與對應 GitHub Issue／派工留言。
-4. 將治理文件與 Meta Issue、live Issue 比對。不一致或 gate 不符就加 blocked
-   overlay、署名拒審並結束。
-5. 從 open PR 中選最舊且只有 `loop:needs-review` primary state、沒有 `loop:blocked` 的
-   一件；沒有就 no-op 結束。
+   `origin/main` snapshot 依共同契約讀 active gate、authoring guide、對應 Issue／PR。
+3. 只取有效 Dispatcher assignment、Coder handoff 與既有 verdict finding index；證據
+   歧義才向前分頁，不先抓完整留言歷史。
+4. 將治理文件與一次 bounded live query 的 pause、main、target labels／head／base 比對。
+   不一致或 gate 不符就加 blocked overlay、署名拒審並結束。
+5. 核對 packet target 是唯一、只有 `loop:needs-review` primary state 且沒有
+   `loop:blocked` 的 PR；target 不合格或不存在就 no-op，禁止另列 open PR 尋找替代。
 
 ## 驗證與裁決
 

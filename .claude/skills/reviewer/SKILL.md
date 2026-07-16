@@ -8,12 +8,32 @@ description: agent 閉環的 one-shot 審查角色——在最新 main 上驗證
 協定正本：`docs/agent-loop.md`。每次喚醒只審查一個 PR 後退出；不 sleep、輪詢、
 建立排程、改碼、commit、push、派工或合併。
 
+<!-- loop-common-contract:start -->
+## 共同低 token 安全契約
+
+1. Client 已注入 trusted runner 驗證過的 `AGENTS.md`，算本輪完整讀取；注入缺失或來源
+   不明就 fail closed，且不得再次輸出整份 `AGENTS.md`。
+2. `bounded preflight` 只縮小候選，不是授權或 durable state。直接鎖定其中 object；
+   `snapshot_incomplete` 本身阻斷；object truncation 只補 target 缺口，
+   `meta_comments_truncated` 只影響 gate-exit／舊 marker 查找。
+3. Active-gate 節、authoring guide、target Issue／PR 各只讀一次；skill 已是本角色協定投影。
+   只有歧義才讀 `docs/agent-loop.md` 對應段落；正常 role 不讀 operations runbook。
+4. mutation 前做一次 bounded live revalidation：pause、main、target labels，PR 再核對
+   head／base／draft／mergeability。只對缺口分頁；預設禁止完整 comments/history 與
+   all-issues 查詢。
+5. Mutation 結果不明才重查。成功只留 exit／test count／必要 hash 的 compact summary；
+   失敗才輸出 bounded diagnostics；結尾只輸出一個 compact summary。
+<!-- loop-common-contract:end -->
+
 ## 每輪程序
 
-1. 先查 Meta Issue #1 的 `loop:paused`；存在就無副作用回報 paused。
-2. `git fetch origin main --prune`，記錄完整 `MAIN_SHA`。完整讀取該 snapshot 的
-   `AGENTS.md`、curriculum active gate、authoring guide、loop 協定及 live Issue／派工。
-3. 選最舊、unblocked 且唯一 primary state 是 `needs-review` 的 PR；沒有就 no-op。
+1. 先讀 `bounded preflight`；若已 paused 就無副作用回報 paused。只審 packet 指向的
+   PR；`snapshot_incomplete` 時不依部分資料裁決。
+2. `git fetch origin main --prune`，記錄完整 `MAIN_SHA`，依共同契約讀 active gate、
+   authoring guide、對應 Issue／PR。只取有效 assignment、Coder handoff 與既有 verdict
+   finding index；歧義才分頁。
+3. 以一次 bounded live query 比對 pause、main、target labels／head／base，並核對 target
+   是唯一、unblocked 且 primary state 是 `needs-review` 的 PR；不合格就 no-op，不另列 PR。
    Gate 真相不一致、base 非 `main`、派工缺失或 labels 衝突時 fail closed。
 4. 記錄完整 `headRefOid`。Trusted runner 不 checkout PR；在另一個 disposable
    candidate worktree fetch exact head 與 merge ref。只有 merge commit parents 依序

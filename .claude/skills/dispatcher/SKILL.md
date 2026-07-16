@@ -9,18 +9,38 @@ description: agent 閉環的 one-shot 調度角色——恢復 GitHub durable st
 不 sleep、輪詢、建立排程、改檔、寫稿或做審查裁決。
 只從與最新 `origin/main` 一致的 trusted runner 載入本 skill 與治理指令。
 
+<!-- loop-common-contract:start -->
+## 共同低 token 安全契約
+
+1. Client 已注入 trusted runner 驗證過的 `AGENTS.md`，算本輪完整讀取；注入缺失或來源
+   不明就 fail closed，且不得再次輸出整份 `AGENTS.md`。
+2. `bounded preflight` 只縮小候選，不是授權或 durable state。直接鎖定其中 object；
+   `snapshot_incomplete` 本身阻斷；object truncation 只補 target 缺口，
+   `meta_comments_truncated` 只影響 gate-exit／舊 marker 查找。
+3. Active-gate 節、authoring guide、target Issue／PR 各只讀一次；skill 已是本角色協定投影。
+   只有歧義才讀 `docs/agent-loop.md` 對應段落；正常 role 不讀 operations runbook。
+4. mutation 前做一次 bounded live revalidation：pause、main、target labels，PR 再核對
+   head／base／draft／mergeability。只對缺口分頁；預設禁止完整 comments/history 與
+   all-issues 查詢。
+5. Mutation 結果不明才重查。成功只留 exit／test count／必要 hash 的 compact summary；
+   失敗才輸出 bounded diagnostics；結尾只輸出一個 compact summary。
+<!-- loop-common-contract:end -->
+
 ## 每輪程序
 
-1. 先查 Meta Issue #1 的 `loop:paused`；存在就無副作用回報 paused。
-2. `git fetch origin main --prune`，記錄完整 `MAIN_SHA`。完整讀取該 snapshot 的
-   `AGENTS.md`、curriculum active gate、authoring guide 與 loop 協定，再讀 Meta
-   Issue、active-gate Issues 及 open loop PR 的 live labels、comments、head／base SHA。
-   三份 gate 真相不一致就 fail closed。
-3. 先 reconciliation：補完已 merge 的後置狀態；修復半完成 label transaction；
+1. 先讀 `bounded preflight`；若已 paused 就無副作用回報 paused。
+   `snapshot_incomplete` 時不依部分資料 mutation。
+2. `git fetch origin main --prune`，記錄完整 `MAIN_SHA`，依共同契約讀 active gate、
+   authoring guide 與本輪候選。把 packet 的 main／workflow fingerprint／object state
+   與一次 bounded live query 比對。
+3. 有 WIP 時只讀 packet 指向的 Issue／PR 與最新相關派工、claim、verdict 或 marker；
+   無 WIP 且要檢查 gate exit／派工時才列 active-gate Issue set。三份 gate 真相
+   不一致就 fail closed。
+4. 先 reconciliation：補完已 merge 的後置狀態；修復半完成 label transaction；
    多個 primary labels 或無法唯一恢復時加 blocked；reviewed head／base 過期的
    approval 先留含 reviewed／current SHA 的穩定 marker，再以期望的完整 label set
    機械性退回 `needs-review` 並退出。已有 durable marker 時不重複留言。
-4. 新動作優先序：
+5. 新動作優先序：
    1. 在任何派工前檢查 gate exit；已完成只彙整 Issue／PR／merge SHA，並在 Meta
       Issue #1 留下署名通知與精確 marker
       `<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->`。先搜尋相同 marker，
@@ -30,7 +50,7 @@ description: agent 閉環的 one-shot 調度角色——恢復 GitHub durable st
    3. 依 primary label timeline 處理超過 6 小時的停滯、第三次退件或圈外 PR。
    4. WIP 為零、無 blocked 且 gate 未退出時，依模板派一個 gate-scoped slice。
    5. 無安全動作就 no-op。
-5. 結束摘要 `role`、穩定 kebab-case `result`、`object`、`main_sha`、`head_sha`、
+6. 結束摘要 `role`、穩定 kebab-case `result`、`object`、`main_sha`、`head_sha`、
    `mutations`。
 
 ## `operator-stall-reconciliation` 告警喚醒

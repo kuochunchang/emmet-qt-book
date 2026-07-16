@@ -12,15 +12,35 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import tomllib
 from typing import Callable, Iterator, Sequence
 
 
 ROLES = ("dispatcher", "coder", "reviewer")
+PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+ROLE_CODEX_DEFAULTS: dict[str, dict[str, str]] = {
+    "dispatcher": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high",
+        "model_verbosity": "low",
+    },
+    "coder": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium",
+        "model_verbosity": "low",
+    },
+    "reviewer": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high",
+        "model_verbosity": "low",
+    },
+}
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EX_TEMPFAIL = 75
 EX_TIMEOUT = 124
@@ -169,6 +189,40 @@ def resolve_codex(executable: str) -> str:
     return resolved
 
 
+def codex_home() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / ".codex").resolve()
+
+
+def validate_profile_file(profile: str) -> Path:
+    """Require one named profile to remain present and parseable."""
+
+    if PROFILE_PATTERN.fullmatch(profile) is None:
+        raise ValueError(f"Codex profile 名稱無效：{profile}")
+    path = codex_home() / f"{profile}.config.toml"
+    if not path.is_file():
+        raise ValueError(f"找不到 Codex profile：{profile}（{path}）")
+    try:
+        with path.open("rb") as stream:
+            tomllib.load(stream)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(
+            f"無法解析 Codex profile：{profile}（{path}）：{error}"
+        ) from error
+    return path
+
+
+def role_execution_config(role: str) -> dict[str, str]:
+    """Return the repo-controlled default for a role without a named profile."""
+
+    try:
+        return dict(ROLE_CODEX_DEFAULTS[role])
+    except KeyError as error:
+        raise ValueError(f"未知 role：{role}") from error
+
+
 def build_command(
     role: str,
     workdir: Path,
@@ -201,6 +255,22 @@ def build_command(
     ]
     if profile:
         command.extend(["--profile", profile])
+    else:
+        execution = role_execution_config(role)
+        command.extend(
+            [
+                "--model",
+                execution["model"],
+                "-c",
+                (
+                    'model_reasoning_effort="'
+                    + execution["model_reasoning_effort"]
+                    + '"'
+                ),
+                "-c",
+                'model_verbosity="' + execution["model_verbosity"] + '"',
+            ]
+        )
     command.append(prompt)
     return command
 
@@ -367,6 +437,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             options.role, requested_workdir, REPOSITORY_ROOT
         )
         codex_bin = resolve_codex(options.codex_bin)
+        if options.profile:
+            validate_profile_file(options.profile)
     except ValueError as error:
         print(f"codex-loop: {error}", file=sys.stderr)
         return 2

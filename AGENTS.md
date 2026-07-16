@@ -170,6 +170,16 @@ durable state，不得各自建立狀態機。要點：
   trusted runner 載入；只有非 control paths 前進時，長駐 runner 的 detached HEAD
   可暫時落後，下一個 role iteration 仍須 fetch 並以最新 main 建立 task／candidate。
   候選 branch／PR 必須在另一 task／candidate worktree 處理，不得成為下一輪控制來源。
+- Trusted runner preflight 已驗證、並由 client 注入的 `AGENTS.md` 算本輪「開工前必查」
+  的讀取；role 不得再用工具輸出整份文件。Curriculum 只讀 active-gate 節，authoring
+  guide 與對應 Issue／PR 各讀一次；只有協定歧義才開啟 `docs/agent-loop.md` 對應段落。
+- Event manager 只把 allowlist 後的 bounded preflight 當候選縮小提示傳給 role；它不是
+  授權或 durable state。Role 預設不得列舉全部 Issues／PR 或完整留言歷史，任何 GitHub
+  mutation 前仍須窄重驗 pause、main SHA、target labels，PR 再重驗 head／base／draft。
+  `snapshot_incomplete` 本身阻斷 mutation；其他 truncation 或證據歧義只在缺失證據會
+  影響本輪決策時對缺口分頁。
+- 成功驗證只輸出 compact summary；失敗才輸出 bounded diagnostics。這只限制送入模型的
+  command output，不影響操作者看到完整 Codex JSONL event stream。
 - Event manager 發現 `origin/main` 的 control inputs 改變時，必須停止派送新事件；
   有 child 時先 drain，idle 後只由 launcher-owned detached rotator 驗證 events
   PID／lock、session ownership、乾淨 runners 與 same-repo，再同步三個 runners、
