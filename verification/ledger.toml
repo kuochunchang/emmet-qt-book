@@ -7,6 +7,140 @@ schema_version = 2
 W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
 
 [[records]]
+id = "ch16-v030-valid-order-rules"
+batch = "W1"
+document = "manuscript/chapters/16-precise-values-valid-orders.md"
+chapter = "精確數值、交易所規則與合法訂單"
+claim = "v0.3.0 以字串 Decimal、版本化 SymbolRules／leverage brackets、validate_order 與 check_max_num_orders 對固定 BTCUSDT 期貨訂單逐項核對 tick、step、minimum notional、掛單上限與最大初始槓桿；違規訂單保留原值並 fail closed，不自動截斷。"
+content_state = "可操作"
+data_checksums = [
+  "v030-futures-BTCUSDT-rules=sha256:30b8d84e7b4396fdb1b761e074b86e62285f0c9a1d3df1a1a33a566850464671",
+  "v030-futures-BTCUSDT-brackets=sha256:3c65e838938d9e65fd2384dc11d835f41df65ec8582b528676c1821c2e1bd895",
+]
+data_checksum_note = "兩個 checksum 固定已發布 v0.3.0 tag 內的測試規則與分層 fixture；它們是歷史測試快照，不是目前 Binance 或私人帳戶規則。"
+formal_entrypoints = [
+  "quant.common.rules.RulesRepository.load_symbol_rules",
+  "quant.common.rules.RulesRepository.load_bracket_table",
+  "quant.common.rules.validate_order",
+  "quant.common.rules.check_max_num_orders",
+  "quant.common.rules.LeverageBracketTable.max_leverage_for",
+]
+schemas = [
+  "quant.common.models.orders.Order",
+  "quant.common.rules.filters.SymbolRules",
+  "quant.common.rules.filters.OrderCountCheck",
+  "quant.common.rules.brackets.LeverageBracketTable",
+  "quant.common.errors.OrderValidationError",
+]
+interface_note = "已發布 Python 模型與規則 API 只讀已提交 fixture 並產生本地合法性證據；它們不是讀者下單 CLI，也不送出私人訂單、切換槓桿或證明 admission／成交完成。"
+evidence_refs = [
+  "book:manuscript/chapters/16-precise-values-valid-orders.md",
+  "book:manuscript/appendices/d-market-microstructure.md",
+  "book:manuscript/assets/ch16-order-rules-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/orders.py",
+  "repo:emmet-qt-bt1:src/quant/common/rules/filters.py",
+  "repo:emmet-qt-bt1:src/quant/common/rules/brackets.py",
+  "repo:emmet-qt-bt1:src/quant/common/rules/repository.py",
+  "repo:emmet-qt-bt1:tests/fixtures/exchange_rules/futures/BTCUSDT.json",
+  "repo:emmet-qt-bt1:tests/fixtures/exchange_rules/brackets/BTCUSDT.json",
+  "repo:emmet-qt-bt1:tests/unit/test_rules_filters.py",
+  "repo:emmet-qt-bt1:tests/unit/test_rules_brackets.py",
+  "repo:emmet-qt-bt1:docs/design/step-3a-common-base.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run pytest tests/unit/test_rules_filters.py tests/unit/test_rules_brackets.py -q",
+  "sha256sum tests/fixtures/exchange_rules/futures/BTCUSDT.json tests/fixtures/exchange_rules/brackets/BTCUSDT.json",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch16-order-rules-oracle.py\"",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "57 passed",
+  "30b8d84e7b4396fdb1b761e074b86e62285f0c9a1d3df1a1a33a566850464671",
+  "3c65e838938d9e65fd2384dc11d835f41df65ec8582b528676c1821c2e1bd895",
+  "valid-limit=PASS,price-50000.10,qty-0.010,unchanged-true",
+  "bad-tick=PRICE_FILTER,code--4014,price-50000.15,qty-0.010,unchanged-true",
+  "bad-step=LOT_SIZE,code--4013,price-50000.10,qty-0.0015,unchanged-true",
+  "too-small=MIN_NOTIONAL,code--4164,price-50000.10,qty-0.001,unchanged-true",
+  "open-orders-159=OK,cap-200",
+  "open-orders-160=WARN,cap-200",
+  "open-orders-200=REJECT,cap-200",
+  "leverage-notional-3000000=requested-50,max-20,FAIL-CLOSED",
+  "float-quantity=TYPE-ERROR,FAIL-CLOSED",
+  "chapter-16-order-rules-oracle=PASS",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；Python 3.12.3；filters／brackets 聚焦測試 57 passed；兩份 fixture checksum 相符；合法單通過且三種 filter 拒絕皆保留原始 price／qty；掛單數 159／160／200 分別為 OK／WARN／REJECT；名義分層邊界與 float guard 均符合固定 oracle。"
+known_differences = [
+  "fixture 的 BTCUSDT 數值與 snapshot_ts 是已發布測試證據，不支持目前市場、任意帳戶、即時規則或可成交性宣稱。",
+  "validate_order 只涵蓋已發布 price／quantity／minimum notional filters；requested leverage 比對是章內明示 gate，完整 admission、資金預留與會話風控不在本章宣稱內。",
+  "本地錯誤碼映射不代表本輪曾呼叫 Binance 私人下單端點或收到真實交易所回應。",
+]
+verified_on = "2026-07-17"
+revalidation_triggers = [
+  "Order Decimal guard、SymbolRules、RulesRepository、validate_order、check_max_num_orders 或 LeverageBracketTable 語義改變",
+  "固定 fixture、checksum、helper、測試數量、PASS markers、filter error code 或分層決定改變",
+  "配套基線 tag／commit 或 Chapter 16 內容狀態改變",
+]
+
+[[records]]
+id = "ch16-binance-usdm-filter-bracket-source"
+batch = "W1"
+document = "manuscript/chapters/16-precise-values-valid-orders.md"
+chapter = "精確數值、交易所規則與合法訂單"
+claim = "Binance 官方 USDⓈ-M 文件分列 PRICE_FILTER、LOT_SIZE、MARKET_LOT_SIZE、MAX_NUM_ORDERS、MIN_NOTIONAL 與 notional／leverage bracket 欄位，支持本章的欄位與邊界語義。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：本項只重新查證官方公開文件欄位，不保存即時 exchangeInfo、私人 leverage bracket 或市場資料集。"
+formal_entrypoints = []
+schemas = [
+  "Binance USDⓈ-M PRICE_FILTER: minPrice／maxPrice／tickSize",
+  "Binance USDⓈ-M LOT_SIZE: minQty／maxQty／stepSize",
+  "Binance USDⓈ-M MARKET_LOT_SIZE／MAX_NUM_ORDERS／MIN_NOTIONAL",
+  "Binance USDⓈ-M leverage bracket: initialLeverage／notionalFloor／notionalCap／maintMarginRatio／cum",
+]
+interface_note = "第一手公開文件只支持欄位與產品語義；章內固定數值、錯誤碼與輸出仍由已發布配套 tag 的 fixture／測試支撐，不呼叫需簽名的私人 bracket 或下單端點。"
+evidence_refs = [
+  "url:https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/common-definition",
+  "url:https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/account#notional-and-leverage-brackets",
+]
+verification_commands = [
+  "開啟 Binance USDⓈ-M Common Definition；核對 PRICE_FILTER／LOT_SIZE／MARKET_LOT_SIZE／MAX_NUM_ORDERS／MIN_NOTIONAL",
+  "開啟 Binance USDⓈ-M Notional and Leverage Brackets；核對 initialLeverage／notionalFloor／notionalCap／maintMarginRatio／cum 與 USER_DATA 邊界",
+]
+executable = false
+executable_note = "不適用：官方文件需連網且可能更新，發布前須人工重新查證；私人 leverage bracket 需要憑證，本書不為文件驗證呼叫該端點。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "PRICE_FILTER",
+  "LOT_SIZE",
+  "MARKET_LOT_SIZE",
+  "MAX_NUM_ORDERS",
+  "MIN_NOTIONAL",
+  "initialLeverage",
+  "notionalFloor",
+  "notionalCap",
+  "maintMarginRatio",
+  "cum",
+  "USER_DATA",
+]
+result = "pass"
+observed = "2026-07-17 重新查證：官方 common definition 明示 price／quantity 的範圍與步進、期貨市價單數量、單 symbol 掛單上限與最小名義額；官方 account API 明示 bracket floor／cap、最大初始槓桿、維持保證金率、cum，且該 bracket endpoint 是需簽名 USER_DATA。未採用文件範例數值作本章規則快照。"
+known_differences = [
+  "官方文件與交易所規則可能改變；本筆只支持欄位語義，發布前仍須重新查證。",
+  "本筆不支持章內固定 BTCUSDT 數值、任何帳戶的 bracket、即時可成交性、已提交訂單或交易決定。",
+]
+verified_on = "2026-07-17"
+revalidation_triggers = [
+  "Binance USDⓈ-M symbol filters、minimum notional、order limit 或 leverage bracket 文件語義改變",
+  "第 16 章對官方欄位、公開／私人端點或 fixture 邊界的敘述改變",
+  "發布前市場事實重新查證",
+]
+
+[[records]]
 id = "ch10-question-data-contract-time-boundaries"
 batch = "W1"
 document = "manuscript/chapters/10-question-to-data-contract.md"
