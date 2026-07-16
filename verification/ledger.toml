@@ -53,6 +53,128 @@ revalidation_triggers = [
 ]
 
 [[records]]
+id = "ch11-v030-foundation-cli-fixed-offline"
+batch = "W1"
+document = "manuscript/chapters/11-foundation-data-pipelines.md"
+chapter = "四條 Foundation 資料管線與 quant-data"
+claim = "v0.3.0 的 quant-data 正式提供 refresh、snapshot、status；固定離線 oracle 可分別核對期貨 K 線、標記價格 K 線、資金費率與現貨 K 線路由，不觸網的兩日 status 樣本回傳完整涵蓋、列數與逐檔 SHA-256。"
+content_state = "可操作"
+data_checksums = [
+  "fixed-um-klines-2024-01-01=sha256:c9f136da552673c1eee839faf8619aacf6f3736fc9dcaa27caf349dd25ffce39",
+  "fixed-um-klines-2024-01-02=sha256:0edfea51a82c1092919c7b71032255df0c678af55adc1eaba9ed67b746684eca",
+  "fixed-spot-klines-2024-01-01=sha256:c9f136da552673c1eee839faf8619aacf6f3736fc9dcaa27caf349dd25ffce39",
+]
+data_checksum_note = "checksum 只涵蓋由 v0.3.0 schema／store 產生的固定教學 Parquet；期貨與現貨樣本使用相同固定 OHLCV，checksum 相同是預期結果，不代表外部市場下載。"
+formal_entrypoints = [
+  "quant-data refresh",
+  "quant-data snapshot",
+  "quant-data status",
+]
+schemas = [
+  "quant.data.pipelines.PipelineKind",
+  "quant.data.status.DataStatus",
+  "quant.data.lifecycle.CollectResult",
+  "quant.data.validate.ValidationReport",
+]
+interface_note = "正式 console entry point 的三個子命令分別負責刷新、規則／生命週期快照與只讀狀態；測試注入只建立固定離線證據，不冒充產品外部下載。"
+evidence_refs = [
+  "book:manuscript/chapters/11-foundation-data-pipelines.md",
+  "repo:emmet-qt-bt1:pyproject.toml",
+  "repo:emmet-qt-bt1:src/quant/cli/data.py",
+  "repo:emmet-qt-bt1:src/quant/data/pipelines.py",
+  "repo:emmet-qt-bt1:src/quant/data/status.py",
+  "repo:emmet-qt-bt1:tests/unit/test_data_pipelines.py",
+  "repo:emmet-qt-bt1:tests/unit/test_cli_data.py",
+  "repo:emmet-qt-bt1:tests/integration/test_it2_pipeline_models.py",
+  "repo:emmet-qt-bt1:docs/design/step-2-data-pipeline.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run quant-data --help",
+  "uv run quant-data refresh --help",
+  "uv run quant-data snapshot --help",
+  "uv run quant-data status --help",
+  "uv run pytest tests/unit/test_data_pipelines.py tests/unit/test_cli_data.py tests/integration/test_it2_pipeline_models.py -q",
+  "uv run python -c 'from datetime import UTC,datetime; from pathlib import Path; import pyarrow as pa; from quant.common.models.enums import Market; from quant.data.layout import DataPaths; from quant.data.schema import KLINES_SCHEMA; from quant.data.store import write_partition_file; root=Path(\"/tmp/emmet-ch11-fixed-c999965\"); d=DataPaths(root).kline_dir(Market.FUTURES,\"BTCUSDT\",\"1h\"); d.mkdir(parents=True,exist_ok=True); ms=lambda y,m,day:int(datetime(y,m,day,tzinfo=UTC).timestamp()*1000); make=lambda start:pa.table({\"open_time\":pa.array([start+i*3600000 for i in range(24)],pa.int64()),\"open\":pa.array([1.0]*24,pa.float64()),\"high\":pa.array([2.0]*24,pa.float64()),\"low\":pa.array([0.5]*24,pa.float64()),\"close\":pa.array([1.5]*24,pa.float64()),\"volume\":pa.array([10.0]*24,pa.float64()),\"quote_volume\":pa.array([20.0]*24,pa.float64())},schema=KLINES_SCHEMA); [(write_partition_file(d,name,make(start),1706745600000) if not (d/name).exists() else None) for name,start in ((\"2024-01-01.parquet\",ms(2024,1,1)),(\"2024-01-02.parquet\",ms(2024,1,2)))]; print(root)'",
+  "uv run quant-data status --root /tmp/emmet-ch11-fixed-c999965 --market um --symbol BTCUSDT --kind klines --interval 1h",
+  "uv run python -c 'import runpy,tempfile; n=runpy.run_path(\"tests/unit/test_cli_data.py\"); root=tempfile.mkdtemp(prefix=\"emmet-ch11-spot-\"); deps=n[\"_deps\"](n[\"_FakeRest\"](),n[\"_ms\"](2024,2,1)); refresh=[\"refresh\",\"--root\",root,\"--market\",\"spot\",\"--symbol\",\"BTCUSDT\",\"--interval\",\"1h\",\"--kinds\",\"klines\",\"--start\",\"2024-01-01\",\"--end\",\"2024-01-02\"]; status=[\"status\",\"--root\",root,\"--market\",\"spot\",\"--symbol\",\"BTCUSDT\",\"--kind\",\"klines\",\"--interval\",\"1h\"]; assert n[\"main\"](refresh,deps=deps)==0; assert n[\"main\"](status)==0; print(\"spot-fixed-offline=PASS\")'",
+]
+executable = false
+executable_note = "不適用：其中一項 oracle 是章內多行固定樣本建立程序，tier-3 不應在未建立專用暫存根目錄時自動重跑；其餘命令已逐項實跑。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "34 passed",
+  "refresh",
+  "snapshot",
+  "status",
+  "\"total_rows\":48",
+  "c9f136da552673c1eee839faf8619aacf6f3736fc9dcaa27caf349dd25ffce39",
+  "0edfea51a82c1092919c7b71032255df0c678af55adc1eaba9ed67b746684eca",
+]
+result = "pass"
+observed = "tag／HEAD 固定且 worktree 乾淨；Python 3.12.3；三個正式子命令 help 相符；固定離線 pipeline／CLI／IT-2 共 34 passed；兩日期貨樣本為 48 列且兩檔 checksum 相符；spot 固定路由另回傳 24 列與 checksum；snapshot 固定 boundary 回傳 symbols_written=1、brackets_skipped=true。"
+known_differences = [
+  "固定離線測試使用注入來源，固定 Parquet 也由教學值建立；兩者都不支持外部下載成功宣稱。",
+  "本次沒有重跑真實 Vision archive 或 REST live 綠燈；配套既有 nightly／manual 腳本與發布證據不能冒充本次環境的外部結果。",
+  "空分區的 status 可為 ok=true 且 total_rows=0，研究 readiness 仍須另比對預期窗口與最低列數。",
+]
+verified_on = "2026-07-16"
+revalidation_triggers = [
+  "quant-data console entry point、子命令參數、退出碼或 JSON schema 改變",
+  "四個 PipelineKind、archive／REST 規劃、snapshot 或 status 責任邊界改變",
+  "固定樣本內容、PyArrow／lockfile、預期列數、coverage 或 checksum 改變",
+  "配套基線 tag／commit 或 Chapter 11 內容狀態改變",
+]
+
+[[records]]
+id = "ch11-v030-refresh-network-fail-closed"
+batch = "W1"
+document = "manuscript/chapters/11-foundation-data-pipelines.md"
+chapter = "四條 Foundation 資料管線與 quant-data"
+claim = "正式 quant-data refresh 在受控外部網路不可用時重試三次後退出 1，不把替身、空資料或部分外部結果標為成功；此 oracle 不冒充特定地區的 HTTP 451 證據。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：受控連線拒絕發生在 Vision zip 寫入前，oracle 要求沒有可宣稱成功的外部資料檔。"
+formal_entrypoints = [
+  "quant-data refresh",
+]
+schemas = []
+interface_note = "正式 refresh 組合根使用 Vision／REST；本紀錄只核對網路錯誤的產品退出邊界。"
+evidence_refs = [
+  "book:manuscript/chapters/11-foundation-data-pipelines.md",
+  "repo:emmet-qt-bt1:src/quant/cli/data.py",
+  "repo:emmet-qt-bt1:src/quant/data/sources/vision.py",
+  "repo:emmet-qt-bt1:scripts/nightly_archive_pipeline.sh",
+  "repo:emmet-qt-bt1:scripts/nightly_data_pipeline.sh",
+  "repo:emmet-qt-bt1:docs/design/step-2-data-pipeline.md",
+]
+verification_commands = [
+  "env HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY= uv run quant-data refresh --root /tmp/emmet-ch11-network-block --market um --symbol BTCUSDT --interval 1h --kinds klines --start 2026-07-14 --end 2026-07-15",
+]
+executable = false
+executable_note = "不適用：這是刻意阻斷外部網路、包含重試等待且預期退出 1 的人工 fail-closed oracle，不納入 tier-3 自動重跑。"
+oracle_exit_code = 1
+oracle_stdout_contains = [
+  "下載失敗（已重試 3 次）",
+  "BTCUSDT-1h-2026-07-14.zip",
+]
+result = "pass"
+observed = "正式 refresh 嘗試 Vision daily zip，受控拒絕連線後重試三次，stderr 保存目標 URL，退出碼為 1；沒有外部成功 JSON 或可引用 checksum。"
+known_differences = [
+  "本 oracle 是人工設定本機拒絕連線代理，不證明 Binance 或特定地區當時故障。",
+  "發布設計記錄 GitHub-hosted 美國 runner 的 Futures HTTP 451 與 hosted archive／manual REST 分流；本次沒有重跑該外部事件。",
+  "本次只核對 refresh 的網路 fail-closed；資料品質 findings 的退出碼 2 由固定 CLI 測試另行覆蓋。",
+]
+verified_on = "2026-07-16"
+revalidation_triggers = [
+  "Vision 重試預算、錯誤分類、stderr 訊息或 refresh 退出碼改變",
+  "archive／REST 外部責任分流或 HTTP 451 處置政策改變",
+  "配套基線 tag／commit 或 Chapter 11 fail-closed 決定改變",
+]
+
+[[records]]
 id = "setup-v030-tag-worktree"
 batch = "W1"
 document = "manuscript/front-matter/setup.md"

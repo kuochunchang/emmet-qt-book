@@ -21,7 +21,7 @@
 # 第三篇　沒有可信資料，就沒有可信結論
 
 - [先問問題，再決定需要什麼資料](chapters/10-question-to-data-contract.md)
-- [四條 Foundation 資料管線與 `quant-data`]()
+- [四條 Foundation 資料管線與 `quant-data`](chapters/11-foundation-data-pipelines.md)
 - [時間、K 線收盤與多資料流對齊]()
 - [缺口、重複、亂序與非法 OHLC]()
 - [歷史當下的市場：PIT universe、生命週期與規則快照]()
