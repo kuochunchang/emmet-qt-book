@@ -1,0 +1,67 @@
+name: Publish book to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the book
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Require the companion read token
+        env:
+          COMPANION_READ_TOKEN: ${{ secrets.EMMET_QT_BT1_READ_TOKEN }}
+        run: |
+          if [[ -z "$COMPANION_READ_TOKEN" ]]; then
+            echo "Missing EMMET_QT_BT1_READ_TOKEN repository secret." >&2
+            exit 2
+          fi
+
+      - name: Check out the verified companion baseline
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: kuochunchang/emmet-qt-bt1
+          ref: c999965e5cc923281541409cda9502beb93b8a60
+          path: _companion/emmet-qt-bt1-v0.3.0
+          token: ${{ secrets.EMMET_QT_BT1_READ_TOKEN }}
+          persist-credentials: false
+
+      - name: Build and verify the complete book
+        env:
+          EMMET_QT_BT1_DIR: ${{ github.workspace }}/_companion/emmet-qt-bt1-v0.3.0
+        run: ./scripts/book-check
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+
+      - name: Upload the verified HTML only
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: book
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

@@ -32,18 +32,18 @@ continue／no-go 決定。
 
 毛賠率在本附錄定義為平均毛獲利絕對值除以平均毛虧損絕對值：
 
-```text
-payoff ratio_gross = W_g / |L_g|
-```
+\\[
+\mathrm{payoff\ ratio}\_{\mathrm{gross}}=\frac{W\_g}{|L\_g|}
+\\]
 
 勝率只回答「正 outcome 的比例」，賠率回答平均贏一次相對平均輸一次的大小。
 兩者都沒有自動包含成本；名稱若不標 gross／net，就不足以接受審核。
 
 淨賠率為：
 
-```text
-payoff ratio_net = W_n / |L_n|
-```
+\\[
+\mathrm{payoff\ ratio}\_{\mathrm{net}}=\frac{W\_n}{|L\_n|}
+\\]
 
 只有 `W_n > 0`、`L_n < 0` 時，這個寫法才保有「贏／輸」的直覺。若成本使原本的
 毛贏家變成淨虧損，就應重新分類 outcome，而不是硬算一個看似正常的比率。
@@ -52,32 +52,34 @@ payoff ratio_net = W_n / |L_n|
 
 固定兩種 outcome 時：
 
-```text
-EV_gross = p × W_g + (1-p) × L_g
-
-W_n = W_g - K
-L_n = L_g - K
-
-EV_net = p × W_n + (1-p) × L_n
-       = EV_gross - K
-```
+\\[
+\begin{aligned}
+\mathrm{EV}\_{\mathrm{gross}}&=pW\_g+(1-p)L\_g \\\\
+W\_n&=W\_g-K \\\\
+L\_n&=L\_g-K \\\\
+\mathrm{EV}\_{\mathrm{net}}
+  &=pW\_n+(1-p)L\_n
+   =\mathrm{EV}\_{\mathrm{gross}}-K
+\end{aligned}
+\\]
 
 最後一條等式是「每個完整往返的成本只扣一次」oracle。若 `W_n`、`L_n` 已扣
 成本，又在 `EV_net` 後面扣 `K`，就是雙扣；若只從贏家扣成本，則會高估結果。
 
 第 6 章固定案例：
 
-```text
-p = 0.55
-W_g = +120.00 USDT
-L_g = -80.00 USDT
-K = 40.169910 USDT
-
-EV_gross = 30.000000 USDT
-W_n = 79.830090 USDT
-L_n = -120.169910 USDT
-EV_net = -10.169910 USDT
-```
+\\[
+\begin{aligned}
+p&=0.55 \\\\
+W\_g&=+120.00\ \mathrm{USDT} \\\\
+L\_g&=-80.00\ \mathrm{USDT} \\\\
+K&=40.169910\ \mathrm{USDT} \\\\
+\mathrm{EV}\_{\mathrm{gross}}&=30.000000\ \mathrm{USDT} \\\\
+W\_n&=79.830090\ \mathrm{USDT} \\\\
+L\_n&=-120.169910\ \mathrm{USDT} \\\\
+\mathrm{EV}\_{\mathrm{net}}&=-10.169910\ \mathrm{USDT}
+\end{aligned}
+\\]
 
 這個例子說明高於一半的勝率與 `1.5` 毛賠率仍可能得到負淨期望值。
 
@@ -85,9 +87,9 @@ EV_net = -10.169910 USDT
 
 在 `W_n > 0`、`L_n < 0` 且 outcome 只有這兩類時：
 
-```text
-p_BE = |L_n| / (W_n + |L_n|)
-```
+\\[
+p\_{\mathrm{BE}}=\frac{|L\_n|}{W\_n+|L\_n|}
+\\]
 
 第 6 章得到 `60.084955%`。這只對固定 outcome 與固定成本分布成立；它不是信賴
 區間，也沒有證明未來勝率能達到門檻。樣本外、穩健性與統計不確定性屬後續章節。
@@ -96,9 +98,9 @@ p_BE = |L_n| / (W_n + |L_n|)
 
 第 6 章把單輪換手率定義為：
 
-```text
-T = (entry notional + exit notional) / initial equity
-```
+\\[
+T=\frac{N\_{\mathrm{entry}}+N\_{\mathrm{exit}}}{E\_{\mathrm{initial}}}
+\\]
 
 最低查表應同時保存：
 
@@ -116,9 +118,10 @@ T = (entry notional + exit notional) / initial equity
 
 若只有教學輸入，可使用下式建立 fail-closed 的規模上限：
 
-```text
-capacity_qty = scenario_depth × participation_cap
-```
+\\[
+q\_{\mathrm{capacity}}
+=D\_{\mathrm{scenario}}\times c\_{\mathrm{participation}}
+\\]
 
 | 欄位 | 必須記錄 |
 |---|---|
@@ -146,11 +149,14 @@ capacity_qty = scenario_depth × participation_cap
 
 對帶時點權益序列 `E_t`，令歷史高點：
 
-```text
-peak_t = max(E_0, ..., E_t)
-DD_t = (peak_t - E_t) / peak_t              （peak_t > 0）
-MDD = max_t DD_t
-```
+\\[
+\begin{aligned}
+\mathrm{peak}\_t&=\max(E\_0,\ldots,E\_t) \\\\
+\mathrm{DD}\_t&=\frac{\mathrm{peak}\_t-E\_t}{\mathrm{peak}\_t},
+  \qquad \mathrm{peak}\_t>0 \\\\
+\mathrm{MDD}&=\max\_t\mathrm{DD}\_t
+\end{aligned}
+\\]
 
 使用前必須說明 `E_t` 是已實現權益、按標記價格重估權益，或其他明示口徑，以及
 取樣頻率、費用與外部現金流處理。回撤是已觀察路徑相對先前高點的統計量，不是
@@ -158,9 +164,11 @@ MDD = max_t DD_t
 
 Risk of ruin 至少要先定義 ruin 邊界 `E_ruin`、期間與隨機模型：
 
-```text
-P_ruin = P(存在 t，使 E_t <= E_ruin | 已明示模型與期間)
-```
+\\[
+P\_{\mathrm{ruin}}
+=P\!\left(\exists t:\ E\_t\le E\_{\mathrm{ruin}}
+\mid \text{已明示模型與期間}\right)
+\\]
 
 這個機率需要 outcome 分布、序列相依、部位 sizing、成本、跳空與強平機制等
 假設。第 8 章的一個固定 Decimal 快照不能估計它，更不能把強平距離百分比直接
