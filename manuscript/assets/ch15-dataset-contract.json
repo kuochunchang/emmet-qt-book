@@ -1,0 +1,53 @@
+{
+  "manifest_schema_version": 1,
+  "dataset_id": "ch15-fixed-um-btcusdt-1h-2024-01-01-02",
+  "source": {
+    "provider": "emmet-qt-book",
+    "mode": "fixed-offline",
+    "network_used": false
+  },
+  "partition": {
+    "market": "um",
+    "symbol": "BTCUSDT",
+    "kind": "klines",
+    "interval": "1h"
+  },
+  "coverage": {
+    "start_ms": 1704067200000,
+    "end_ms": 1704240000000,
+    "expected_rows": 48
+  },
+  "data_schema": {
+    "name": "quant.data.schema.KLINES_SCHEMA",
+    "version": 1
+  },
+  "rules_snapshot": {
+    "version": "teaching-rules-v1",
+    "snapshot_ts": 1704067200000,
+    "payload": {
+      "price_tick": "0.10",
+      "quantity_step": "0.001",
+      "minimum_notional": "5.00"
+    },
+    "sha256": "08c542035e836d95c24989704a76ea4a2bfbe4e93ba625e412ca3dc87b80e3f0"
+  },
+  "generation": {
+    "generator": "manuscript/assets/ch15-readiness-oracle.py",
+    "days_ms": [1704067200000, 1704153600000],
+    "rows_per_day": 24,
+    "step_ms": 3600000,
+    "last_refresh_ts": 1704240000000,
+    "ohlcv": {
+      "open": 100.0,
+      "high": 102.0,
+      "low": 99.0,
+      "close": 101.0,
+      "volume": 10.0,
+      "quote_volume": 1000.0
+    }
+  },
+  "expected_files": {
+    "2024-01-01.parquet": "5ace1f4d0adc6936c55b1e4567f17c897688f1b9539a0d15bf795edc1ce6b4cf",
+    "2024-01-02.parquet": "baf2f84450b08ae358b10b5aa036b045af6e02d84d80334d9d43a5ee236e9dad"
+  }
+}

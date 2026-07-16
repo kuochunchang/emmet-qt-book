@@ -378,6 +378,84 @@ revalidation_triggers = [
 ]
 
 [[records]]
+id = "ch15-v030-dataset-manifest-readiness"
+batch = "W1"
+document = "manuscript/chapters/15-dataset-manifest-readiness.md"
+chapter = "校驗和、版本與資料 readiness 報告"
+claim = "v0.3.0 的 quant-data status 提供固定分區的 coverage、品質 findings、列數與產品 manifest checksum；章內固定契約另外核對必要窗口、schema／rules 版本及磁碟實檔 checksum，產生可交接的 dataset manifest 與 GO／NO-GO readiness report。"
+content_state = "可操作"
+data_checksums = [
+  "ch15-dataset-contract=sha256:8ca6240326c0dd9005e7bee21523ffc92db8e164198212c62a370436ad9bbb55",
+  "ch15-rules-payload=sha256:08c542035e836d95c24989704a76ea4a2bfbe4e93ba625e412ca3dc87b80e3f0",
+  "ch15-2024-01-01-parquet=sha256:5ace1f4d0adc6936c55b1e4567f17c897688f1b9539a0d15bf795edc1ce6b4cf",
+  "ch15-2024-01-02-parquet=sha256:baf2f84450b08ae358b10b5aa036b045af6e02d84d80334d9d43a5ee236e9dad",
+]
+data_checksum_note = "契約 checksum 涵蓋來源模式、研究窗口、schema／rules 身分、固定生成條件與 expected file checksums；兩個 Parquet checksum 由 v0.3.0 schema／store 對不觸網教學資料產生，並由 helper 對磁碟實檔重算。它們不是 Binance 下載或外部 readiness 證據。"
+formal_entrypoints = [
+  "quant-data status",
+  "quant.data.status.get_data_status",
+  "quant.data.store.write_partition_file",
+]
+schemas = [
+  "quant.data.status.DataStatus",
+  "quant.data.store.Manifest",
+  "quant.data.schema.KLINES_SCHEMA",
+  "chapter-15 dataset manifest schema version 1",
+  "chapter-15 readiness report schema version 1",
+]
+interface_note = "正式 status 只讀產品分區並回傳 coverage、findings、rows 與 manifest files；章內 helper 使用 write_partition_file 建立固定離線 fixture，重算磁碟 SHA-256，再套用明示研究契約。dataset-manifest.json 與 readiness JSON 是章內交接產物，不冒充 v0.3.0 已有同名 CLI、研究引擎或 MCP 入口。"
+evidence_refs = [
+  "book:manuscript/chapters/15-dataset-manifest-readiness.md",
+  "book:manuscript/assets/ch15-dataset-contract.json",
+  "book:manuscript/assets/ch15-readiness-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/cli/data.py",
+  "repo:emmet-qt-bt1:src/quant/data/status.py",
+  "repo:emmet-qt-bt1:src/quant/data/store.py",
+  "repo:emmet-qt-bt1:src/quant/data/schema.py",
+  "repo:emmet-qt-bt1:tests/unit/test_data_store.py",
+  "repo:emmet-qt-bt1:tests/unit/test_data_status.py",
+  "repo:emmet-qt-bt1:tests/unit/test_cli_data.py",
+  "repo:emmet-qt-bt1:docs/design/step-2-data-pipeline.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run pytest tests/unit/test_data_store.py tests/unit/test_data_status.py tests/unit/test_cli_data.py -q",
+  "(cd \"$BOOK_DIR\" && sha256sum manuscript/assets/ch15-dataset-contract.json)",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch15-readiness-oracle.py\" --output-dir /tmp/emmet-ch15-evidence",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "31 passed",
+  "source-mode=fixed-offline,network-false",
+  "coverage=1704067200000..1704240000000,rows-48",
+  "2024-01-01.parquet:5ace1f4d0adc6936c55b1e4567f17c897688f1b9539a0d15bf795edc1ce6b4cf",
+  "2024-01-02.parquet:baf2f84450b08ae358b10b5aa036b045af6e02d84d80334d9d43a5ee236e9dad",
+  "contract-sha256=8ca6240326c0dd9005e7bee21523ffc92db8e164198212c62a370436ad9bbb55",
+  "readiness-matching-manifest=GO",
+  "readiness-checksum-mismatch=NO-GO,status_checksums_match_contract,disk_checksums_match_contract",
+  "readiness-required-day-missing=NO-GO,coverage_exact,required_rows_present",
+  "chapter-15-readiness-oracle=PASS",
+]
+result = "pass"
+observed = "tag／HEAD 固定且 worktree 乾淨；store／status／CLI 測試 31 passed；固定契約 checksum 相符；兩日 48 列的產品 manifest、磁碟實檔與契約逐檔 checksum 一致，matching report 為 GO；expected checksum 改變及必要日缺失分別列出精確 failure 並 NO-GO。"
+known_differences = [
+  "固定 OHLCV、規則 payload、Parquet 與 helper output 都是離線教學證據，不支持外部下載、市場現況或任意研究窗口 readiness 宣稱。",
+  "v0.3.0 status 原樣讀產品 manifest 的 SHA-256，不在每次查詢重算實檔 checksum；章內 helper 才為交接三方比對，但不改寫產品行為。",
+  "v0.3.0 的空分區或不足窗口可能沒有結構 finding；章內研究契約另以精確 coverage 與 expected rows fail closed。",
+  "dataset manifest 與 readiness report 是章內資料契約產物；本章不宣稱已發布同名產品 CLI、研究引擎、MCP readiness 或外部資料品質報告。",
+]
+verified_on = "2026-07-16"
+revalidation_triggers = [
+  "quant-data status JSON、退出碼、coverage／findings、Manifest、FileEntry 或 checksum 責任改變",
+  "固定契約、helper、schema／rules 身分、生成條件、Parquet checksum、PASS markers 或 GO／NO-GO gate 改變",
+  "研究要求的來源模式、必要窗口、最低列數或 readiness checks 改變",
+  "配套基線 tag／commit 或 Chapter 15 內容狀態改變",
+]
+
+[[records]]
 id = "setup-v030-tag-worktree"
 batch = "W1"
 document = "manuscript/front-matter/setup.md"
