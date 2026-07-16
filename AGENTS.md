@@ -27,31 +27,32 @@ README 若與對應權威來源不一致，以權威來源為準並修正 README
 
 > 寫作批次：W1
 >
-> Active gate：`W1-G2`
+> Active gate：`W1-G3`
 >
-> 最後核准日期：2026-07-15
+> 最後核准日期：2026-07-16
 >
-> 核准來源：使用者明確指示；追蹤 Issue #50
+> 核准來源：使用者明確指示；追蹤 Issue #67
 >
-> 前一 gate 完成證據：`W1-G1` — Issue #2；第 1 章 PR #32 @ `ab149f8`、
-> 審查殘留 PR #34 @ `30a9bad`，第 2 章 PR #48 @ `a7815d6`，第 3 章 PR #49 @
-> `0f0151f`；詳細驗證：Meta Issue #1 的 W1-G1 Dispatcher 退出證據留言
-> #4975837598
+> 前一 gate 完成證據：`W1-G2` — Issue #3；第 5 章 PR #54 @ `3834e7b`、
+> 第 6 章 PR #57 @ `381aec8`、第 7 章 PR #59 @ `312cc35`、第 8 章 PR #62 @
+> `6f8aeaa`、第 9 章 PR #64 @ `88f0075`；詳細驗證：Meta Issue #1 的 W1-G2
+> Dispatcher 退出證據留言 #4987761815
 >
 > 詳細進入／退出條件：`docs/curriculum.md`「實施順序與啟動門檻」
 
 只有 default branch `main` 已合併的宣告能啟用 gate；feature branch、舊分支或
 未合併 PR 中的 gate 變更一律視為提案。
 
-`W1-G2` 目前只允許：
+`W1-G3` 目前只允許：
 
-- Issue #3：撰寫第 5–9 章並完成手算帳、成本表與兩案例風險圖。
-- Issue #6：只補寫第 5–9 章直接需要的相關附錄小節，不得一次預寫全部附錄。
-- Issue #7：隨第 5–9 章更新公式、手算與市場事實的對應驗證台帳，並保持開啟到
-  `W1-final`。
+- Issue #4：撰寫第 10–15 章，完成固定版本資料操作、dataset manifest、通過與
+  fail-closed 案例及 data readiness 報告。
+- Issue #6：只補寫第 10–15 章直接需要的相關附錄小節，不得一次預寫全部附錄。
+- Issue #7：隨第 10–15 章更新資料版本、checksum、命令與 fail-closed 案例的對應
+  驗證台帳，並保持開啟到 `W1-final`。
 - 經使用者明確核准、已有 GitHub Issue 追蹤且限於最小範圍的兩類修正：
-  - 直接阻擋 Issue #3、Issue #6 相關附錄或 Issue #7 對應章節台帳達成
-    `W1-G2` 退出條件的缺陷。
+  - 直接阻擋 Issue #4、Issue #6 相關附錄或 Issue #7 對應章節台帳達成
+    `W1-G3` 退出條件的缺陷。
   - 修復 agent guard 未被載入，或 `AGENTS.md`、`docs/curriculum.md` 與 Meta
     Issue #1 不一致的治理缺陷。
 - 使用者核准且由 Meta Issue #1 追蹤的 gate-transition 工作。
@@ -64,9 +65,9 @@ README 若與對應權威來源不一致，以權威來源為準並修正 README
 建立或標記 Issue 本身不構成上述修正的授權；例外工作不得新增或實質擴寫正文／
 附錄，也不得取用後續 gate 的能力、範例、輸出或完成證據。
 
-`W1-G2` 完成前禁止：
+`W1-G3` 完成前禁止：
 
-- 啟動 Issue #4–#5 的新章撰寫或實質擴寫。
+- 啟動 Issue #5 的新章撰寫或實質擴寫。
 - 脫離 active 正文一次預寫 Issue #6 的全部附錄。
 - 撰寫第 4、21–50 章的讀者操作內容。
 - 從配套系統開發分支取得範例、輸出或完成宣稱。
