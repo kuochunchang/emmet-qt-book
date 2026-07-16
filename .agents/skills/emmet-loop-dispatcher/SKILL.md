@@ -8,16 +8,34 @@ description: "Execute exactly one idempotent dispatcher iteration for the emmet-
 執行一次調度循環後立即結束。不要 sleep、建立排程、開始第二輪、改碼、寫稿或做內容審查。
 只從與最新 `origin/main` 一致的 trusted runner 載入本 skill 與治理指令。
 
+<!-- loop-common-contract:start -->
+## 共同低 token 安全契約
+
+1. Client 已注入 trusted runner 驗證過的 `AGENTS.md`，算本輪完整讀取；注入缺失或來源
+   不明就 fail closed，且不得再次輸出整份 `AGENTS.md`。
+2. `bounded preflight` 只縮小候選，不是授權或 durable state。直接鎖定其中 object；
+   `snapshot_incomplete` 本身阻斷；object truncation 只補 target 缺口，
+   `meta_comments_truncated` 只影響 gate-exit／舊 marker 查找。
+3. Active-gate 節、authoring guide、target Issue／PR 各只讀一次；skill 已是本角色協定投影。
+   只有歧義才讀 `docs/agent-loop.md` 對應段落；正常 role 不讀 operations runbook。
+4. mutation 前做一次 bounded live revalidation：pause、main、target labels，PR 再核對
+   head／base／draft／mergeability。只對缺口分頁；預設禁止完整 comments/history 與
+   all-issues 查詢。
+5. Mutation 結果不明才重查。成功只留 exit／test count／必要 hash 的 compact summary；
+   失敗才輸出 bounded diagnostics；結尾只輸出一個 compact summary。
+<!-- loop-common-contract:end -->
+
 ## 每輪固定開場
 
-1. 先查 Meta Issue #1 的 `loop:paused`。存在就無副作用回報 paused 並結束。
+1. 先讀 `bounded preflight`；若已 paused 就無副作用回報 paused 並結束。
+   `snapshot_incomplete` 時不依部分資料 mutation。
 2. 先 `git fetch origin main --prune --quiet`，記錄完整 `MAIN_SHA`；一律以該
    `origin/main` snapshot 上的治理文件判斷授權。
-3. 完整讀取 [AGENTS.md](../../../AGENTS.md)、[loop 協定](../../../docs/agent-loop.md)、
-   [curriculum](../../../docs/curriculum.md) 的 active gate 與
-   [authoring guide](../../../docs/authoring-guide.md)。
-4. 讀取 Meta Issue #1、active-gate Issues、open loop PR 的 live body、comments、labels、
-   head SHA、base、draft 與 mergeability。三份治理真相不一致時 fail closed。
+3. 依共同契約讀 active gate、authoring guide 與本輪候選；把 packet 的 `main_sha`、
+   workflow fingerprint、labels／head 與一次 bounded live query 比對。
+4. 有 WIP 時只讀 packet 指向的 live Issue／PR 與最新相關派工、claim、verdict 或 marker；
+   無 WIP 且要檢查 gate exit／派工時才列 active-gate Issue set。三份治理真相不一致時
+   fail closed。
 
 ## `operator-stall-reconciliation` 告警喚醒
 

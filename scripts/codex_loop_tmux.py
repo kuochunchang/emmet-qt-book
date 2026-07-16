@@ -18,7 +18,6 @@ import stat
 import subprocess
 import sys
 import time
-import tomllib
 from typing import Mapping, Sequence
 
 try:
@@ -33,6 +32,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SESSION = "emmet-qt-book-loop"
 SESSION_MARKER = "@emmet_loop_common_dir"
 SESSION_PROFILES = "@emmet_loop_codex_profiles"
+SESSION_CODEX_CONFIGURATION = "@emmet_loop_codex_configuration"
 COMPONENTS = ("events", *adapter.ROLES)
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -94,11 +94,48 @@ def common_role_profile(
     return None
 
 
+def codex_role_configuration(
+    role_profiles: Mapping[str, str | None],
+    *,
+    legacy_inherited: bool = False,
+) -> dict[str, dict[str, object]]:
+    """Describe the exact per-role config source used by one generation."""
+
+    profiles = resolve_role_profiles(None, role_profiles)
+    result: dict[str, dict[str, object]] = {}
+    for role, profile in profiles.items():
+        if profile is not None:
+            result[role] = {"source": "profile", "profile": profile}
+        elif legacy_inherited:
+            result[role] = {"source": "inherited"}
+        else:
+            defaults = adapter.role_execution_config(role)
+            result[role] = {
+                "source": "repo-default",
+                "model": defaults["model"],
+                "reasoning_effort": defaults["model_reasoning_effort"],
+                "verbosity": defaults["model_verbosity"],
+            }
+    return result
+
+
+def codex_configuration_kind(
+    role_configuration: Mapping[str, Mapping[str, object]],
+) -> str:
+    sources = {
+        str(config.get("source")) for config in role_configuration.values()
+    }
+    if sources == {"repo-default"}:
+        return "repo-defaults"
+    if sources == {"profile"}:
+        return "profiles"
+    if sources == {"inherited"}:
+        return "inherited"
+    return "mixed"
+
+
 def codex_home() -> Path:
-    configured = os.environ.get("CODEX_HOME")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    return (Path.home() / ".codex").resolve()
+    return adapter.codex_home()
 
 
 def validate_profile_files(
@@ -108,16 +145,10 @@ def validate_profile_files(
         {profile for profile in role_profiles.values() if profile is not None}
     )
     for profile in names:
-        path = codex_home() / f"{profile}.config.toml"
-        if not path.is_file():
-            raise LauncherError(f"找不到 Codex profile：{profile}（{path}）")
         try:
-            with path.open("rb") as stream:
-                tomllib.load(stream)
-        except (OSError, tomllib.TOMLDecodeError) as error:
-            raise LauncherError(
-                f"無法解析 Codex profile：{profile}（{path}）：{error}"
-            ) from error
+            adapter.validate_profile_file(profile)
+        except ValueError as error:
+            raise LauncherError(str(error)) from error
 
 
 def runner_workdirs(repository_root: Path = REPOSITORY_ROOT) -> dict[str, Path]:
@@ -538,6 +569,45 @@ def session_role_profiles(
     return result
 
 
+def session_codex_configuration(
+    tmux_bin: str,
+    session: str,
+) -> dict[str, dict[str, object]] | None:
+    raw = tmux_command(
+        tmux_bin,
+        "show-options",
+        "-qv",
+        "-t",
+        session,
+        SESSION_CODEX_CONFIGURATION,
+        check=False,
+    ).stdout.strip()
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise LauncherError(
+            "tmux session 的 Codex execution metadata 無效"
+        ) from error
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        raise LauncherError("tmux session 的 Codex execution metadata 不完整")
+    roles = value.get("roles")
+    if not isinstance(roles, dict) or set(roles) != set(adapter.ROLES):
+        raise LauncherError("tmux session 的 Codex execution metadata 不完整")
+    result: dict[str, dict[str, object]] = {}
+    for role in adapter.ROLES:
+        config = roles[role]
+        if not isinstance(config, dict) or config.get("source") not in {
+            "repo-default",
+            "profile",
+            "inherited",
+        }:
+            raise LauncherError("tmux session 的 Codex execution metadata 類型錯誤")
+        result[role] = dict(config)
+    return result
+
+
 def set_session_role_profiles(
     tmux_bin: str,
     session: str,
@@ -555,6 +625,21 @@ def set_session_role_profiles(
     )
     if session_role_profiles(tmux_bin, session) != profiles:
         raise LauncherError("建立 tmux session Codex profile metadata 失敗")
+    configuration = codex_role_configuration(profiles)
+    tmux_command(
+        tmux_bin,
+        "set-option",
+        "-t",
+        session,
+        SESSION_CODEX_CONFIGURATION,
+        json.dumps(
+            {"schema": 1, "roles": configuration},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    )
+    if session_codex_configuration(tmux_bin, session) != configuration:
+        raise LauncherError("建立 tmux session Codex execution metadata 失敗")
 
 
 def verify_owned_session(
@@ -862,14 +947,21 @@ def status_report(
     exists = session_exists(tmux_bin, session)
     marker = session_marker(tmux_bin, session) if exists else None
     profiles = resolve_role_profiles(profile, role_profiles)
-    profile_source = "arguments" if any(profiles.values()) else "inherited"
+    configuration = codex_role_configuration(profiles)
+    profile_source = "arguments" if any(profiles.values()) else "repo-defaults"
     if exists and marker == str(common_dir):
         stored_profiles = session_role_profiles(tmux_bin, session)
         if stored_profiles is not None:
             profiles = stored_profiles
             profile_source = "session"
-        elif not any(profiles.values()):
-            profile_source = "not-recorded"
+        stored_configuration = session_codex_configuration(tmux_bin, session)
+        if stored_configuration is not None:
+            configuration = stored_configuration
+        else:
+            configuration = codex_role_configuration(
+                profiles, legacy_inherited=True
+            )
+            profile_source = "legacy-session"
     try:
         rotation = json.loads(
             runtime.rotation_state_path(runtime_dir).read_text(encoding="utf-8")
@@ -889,11 +981,10 @@ def status_report(
             role: runner_git_state(workdir)
             for role, workdir in runners.items()
         },
-        codex_configuration=(
-            "profiles" if any(profiles.values()) else "inherited"
-        ),
+        codex_configuration=codex_configuration_kind(configuration),
         codex_profile=common_role_profile(profiles),
         codex_profiles=profiles,
+        codex_role_configuration=configuration,
         codex_profile_source=profile_source,
         rotation=rotation,
     )
@@ -913,6 +1004,7 @@ def dry_run_plan(
     exists = session_exists(tmux_bin, session)
     marker = session_marker(tmux_bin, session) if exists else None
     profiles = resolve_role_profiles(profile, role_profiles)
+    configuration = codex_role_configuration(profiles)
     emit(
         component="tmux",
         result="dry-run",
@@ -932,13 +1024,12 @@ def dry_run_plan(
             role: shlex.join(command) for role, command in commands.items()
         },
         active_components=list(active_components(runtime_dir)),
-        codex_configuration=(
-            "profiles" if any(profiles.values()) else "inherited"
-        ),
+        codex_configuration=codex_configuration_kind(configuration),
         codex_profile=common_role_profile(profiles),
         codex_profiles=profiles,
+        codex_role_configuration=configuration,
         codex_profile_source=(
-            "arguments" if any(profiles.values()) else "inherited"
+            "arguments" if any(profiles.values()) else "repo-defaults"
         ),
     )
 
@@ -1320,11 +1411,12 @@ def launch(options: argparse.Namespace) -> int:
         session=options.session,
         main_sha=main_sha,
         panes=panes,
-        codex_configuration=(
-            "profiles" if any(profiles.values()) else "inherited"
+        codex_configuration=codex_configuration_kind(
+            codex_role_configuration(profiles)
         ),
         codex_profile=common_role_profile(profiles),
         codex_profiles=profiles,
+        codex_role_configuration=codex_role_configuration(profiles),
         codex_profile_source="session",
     )
 
@@ -1376,7 +1468,7 @@ def parser() -> argparse.ArgumentParser:
         type=validate_profile_name,
         help=(
             "三個 Codex 角色共同使用的預設 profile；"
-            "role-specific profile 可覆寫，未指定則繼承 Codex 設定。"
+            "role-specific profile 可覆寫，未指定則使用 repo 角色預設。"
         ),
     )
     for role in adapter.ROLES:

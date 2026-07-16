@@ -17,15 +17,19 @@ from scripts.codex_loop_runtime import (
     build_alert_escalation,
     build_event,
     build_operator_alert,
+    build_preflight_packet,
     classify_snapshot,
     command_with_event_context,
     control_rotation_status,
     describe_operator_status,
     detect_stalled_iteration,
+    duplicate_delivery_is_suppressed,
+    event_fingerprint,
     normalize_snapshot,
     notify_agent,
     operator_pane_status,
     poll_github,
+    pull_request_disappearance_decision,
     pull_request_disappeared,
     read_agent_states,
     rotation_state_path,
@@ -71,12 +75,14 @@ def snapshot(
     gate_exit: dict[str, object] | None = None,
     issues: list[dict[str, object]] | None = None,
     pull_requests: list[dict[str, object]] | None = None,
+    snapshot_incomplete: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "paused": paused,
         "main_sha": main_sha,
         "gate_exit": gate_exit,
         "meta_comments_truncated": False,
+        "snapshot_incomplete": snapshot_incomplete or [],
         "issues": issues or [],
         "pull_requests": pull_requests or [],
     }
@@ -98,6 +104,10 @@ class PaneTitleTests(unittest.TestCase):
 
         self.assertEqual("撰寫中：Issue #3", agent_event_pane_status(issue_event))
         self.assertEqual("審查中：PR #59", agent_event_pane_status(review_event))
+        self.assertEqual(
+            "補查狀態中",
+            agent_event_pane_status({"reason": "snapshot-incomplete"}),
+        )
 
     def test_operator_title_prioritizes_running_and_blocking_state(self) -> None:
         issue = loop_object("issue", 3, "loop:coding")
@@ -134,6 +144,17 @@ class PaneTitleTests(unittest.TestCase):
                     "affected_role": None,
                     "reason": "wip-invariant-violation",
                     "objects": [issue],
+                }
+            ),
+        )
+        self.assertEqual(
+            "阻斷：GitHub 狀態快照不完整",
+            operator_pane_status(
+                {
+                    "health": "blocked",
+                    "owner": "dispatcher",
+                    "reason": "snapshot-incomplete",
+                    "objects": [],
                 }
             ),
         )
@@ -275,6 +296,81 @@ class EventRoutingTests(unittest.TestCase):
     def test_empty_loop_wakes_dispatcher(self) -> None:
         self.assert_route(snapshot(), "dispatcher", "reconcile-or-dispatch")
 
+    def test_graphql_partial_response_errors_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "partial response errors"):
+            normalize_snapshot(
+                {
+                    "errors": [{"message": "field failed"}],
+                    "data": {
+                        "repository": {},
+                        "loopObjects": {"nodes": []},
+                    },
+                }
+            )
+
+    def test_incomplete_snapshot_fails_closed_to_dispatcher(self) -> None:
+        self.assert_route(
+            snapshot(snapshot_incomplete=["loop-objects"]),
+            "dispatcher",
+            "snapshot-incomplete",
+        )
+
+    def test_incomplete_snapshot_ack_is_held_until_snapshot_changes(self) -> None:
+        decision = {
+            "role": "dispatcher",
+            "reason": "snapshot-incomplete",
+        }
+        previous = {
+            "fingerprint": "same",
+            "delivered_at": 10.0,
+            "event_id": "event-1",
+        }
+        successful = {
+            "last_event_id": "event-1",
+            "last_exit_code": 0,
+        }
+
+        self.assertTrue(
+            duplicate_delivery_is_suppressed(
+                decision,
+                "same",
+                previous,
+                successful,
+                now=10_000.0,
+                retry_seconds=30.0,
+            )
+        )
+        self.assertFalse(
+            duplicate_delivery_is_suppressed(
+                decision,
+                "same",
+                previous,
+                {**successful, "last_exit_code": 2},
+                now=10_000.0,
+                retry_seconds=30.0,
+            )
+        )
+        self.assertFalse(
+            duplicate_delivery_is_suppressed(
+                {**decision, "reason": "reconcile-or-dispatch"},
+                "same",
+                previous,
+                successful,
+                now=10_000.0,
+                retry_seconds=30.0,
+            )
+        )
+        self.assertFalse(
+            duplicate_delivery_is_suppressed(
+                decision,
+                "changed",
+                previous,
+                successful,
+                now=11.0,
+                retry_seconds=30.0,
+            )
+        )
+
     def test_current_main_gate_exit_quiesces_empty_loop(self) -> None:
         main_sha = "a" * 40
         state = snapshot(
@@ -361,7 +457,10 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": main_sha},
                     },
                     "meta": {
-                        "labels": {"nodes": [{"name": "loop:paused"}]},
+                        "labels": {
+                            "nodes": [{"name": "loop:paused"}],
+                            "pageInfo": {"hasNextPage": False},
+                        },
                         "comments": {
                             "nodes": [
                                 {
@@ -385,16 +484,21 @@ class EventRoutingTests(unittest.TestCase):
                             "number": 3,
                             "updatedAt": "2026-07-15T00:00:00Z",
                             "labels": {
-                                "nodes": [{"name": "loop:queued"}]
+                                "nodes": [{"name": "loop:queued"}],
+                                "pageInfo": {"hasNextPage": False},
                             },
                         },
                         {
                             "__typename": "Issue",
                             "number": 9,
                             "updatedAt": "2026-07-15T00:00:00Z",
-                            "labels": {"nodes": [{"name": "documentation"}]},
+                            "labels": {
+                                "nodes": [{"name": "documentation"}],
+                                "pageInfo": {"hasNextPage": False},
+                            },
                         },
-                    ]
+                    ],
+                    "pageInfo": {"hasNextPage": False},
                 },
             }
         }
@@ -404,6 +508,167 @@ class EventRoutingTests(unittest.TestCase):
         self.assertEqual("W1-G2", normalized["gate_exit"]["gate"])
         self.assertTrue(normalized["meta_comments_truncated"])
         self.assertEqual([3], [item["number"] for item in normalized["issues"]])
+
+    def test_normalization_marks_paginated_state_incomplete(self) -> None:
+        payload = {
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "a" * 40},
+                    },
+                    "meta": {
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": True},
+                        },
+                        "comments": {
+                            "nodes": [],
+                            "pageInfo": {"hasPreviousPage": False},
+                        },
+                    },
+                },
+                "loopObjects": {
+                    "nodes": [
+                        {
+                            "__typename": "Issue",
+                            "number": 3,
+                            "updatedAt": "2026-07-15T00:00:00Z",
+                            "labels": {
+                                "nodes": [{"name": "loop:queued"}],
+                                "pageInfo": {"hasNextPage": True},
+                            },
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": True},
+                },
+            }
+        }
+
+        normalized = normalize_snapshot(payload)
+
+        self.assertEqual(
+            ["issue#3-labels", "loop-objects", "meta-labels"],
+            normalized["snapshot_incomplete"],
+        )
+        self.assert_route(
+            normalized, "dispatcher", "snapshot-incomplete"
+        )
+
+    def test_missing_connection_page_info_fails_closed(self) -> None:
+        payload = {
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "a" * 40},
+                    },
+                    "meta": {
+                        "labels": {"nodes": []},
+                        "comments": {"nodes": []},
+                    },
+                },
+                "loopObjects": {"nodes": []},
+            }
+        }
+
+        normalized = normalize_snapshot(payload)
+
+        self.assertEqual(
+            ["loop-objects", "meta-comments", "meta-labels"],
+            normalized["snapshot_incomplete"],
+        )
+        self.assert_route(
+            normalized, "dispatcher", "snapshot-incomplete"
+        )
+
+    def test_paginated_labels_fail_closed_before_loop_label_filter(self) -> None:
+        payload = {
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "a" * 40},
+                    },
+                    "meta": {
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                        "comments": {
+                            "nodes": [],
+                            "pageInfo": {"hasPreviousPage": False},
+                        },
+                    },
+                },
+                "loopObjects": {
+                    "nodes": [
+                        {
+                            "__typename": "Issue",
+                            "number": 3,
+                            "updatedAt": "2026-07-15T00:00:00Z",
+                            "labels": {
+                                "nodes": [{"name": "documentation"}],
+                                "pageInfo": {"hasNextPage": True},
+                            },
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False},
+                },
+            }
+        }
+
+        normalized = normalize_snapshot(payload)
+
+        self.assertEqual([], normalized["issues"])
+        self.assertEqual(
+            ["issue#3-labels"], normalized["snapshot_incomplete"]
+        )
+        self.assert_route(
+            normalized, "dispatcher", "snapshot-incomplete"
+        )
+
+    def test_truncated_meta_history_does_not_block_normal_wip_routing(self) -> None:
+        payload = {
+            "data": {
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "a" * 40},
+                    },
+                    "meta": {
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                        "comments": {
+                            "nodes": [],
+                            "pageInfo": {"hasPreviousPage": True},
+                        },
+                    },
+                },
+                "loopObjects": {
+                    "nodes": [
+                        {
+                            "__typename": "Issue",
+                            "number": 3,
+                            "updatedAt": "2026-07-15T00:00:00Z",
+                            "labels": {
+                                "nodes": [{"name": "loop:coding"}],
+                                "pageInfo": {"hasNextPage": False},
+                            },
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False},
+                },
+            }
+        }
+
+        normalized = normalize_snapshot(payload)
+
+        self.assertTrue(normalized["meta_comments_truncated"])
+        self.assertEqual([], normalized["snapshot_incomplete"])
+        self.assert_route(normalized, "coder", "coding-work-available")
 
     def test_normalization_ignores_gate_exit_for_stale_main(self) -> None:
         current_main = "b" * 40
@@ -415,7 +680,10 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": current_main},
                     },
                     "meta": {
-                        "labels": {"nodes": []},
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
                         "comments": {
                             "nodes": [
                                 {
@@ -441,7 +709,10 @@ class EventRoutingTests(unittest.TestCase):
                         },
                     },
                 },
-                "loopObjects": {"nodes": []},
+                "loopObjects": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
             }
         }
 
@@ -456,8 +727,26 @@ class EventRoutingTests(unittest.TestCase):
     def test_github_poll_uses_supported_multi_label_or_qualifier(self) -> None:
         payload = {
             "data": {
-                "repository": {"meta": {"labels": {"nodes": []}}},
-                "loopObjects": {"nodes": []},
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "a" * 40},
+                    },
+                    "meta": {
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                        "comments": {
+                            "nodes": [],
+                            "pageInfo": {"hasPreviousPage": False},
+                        },
+                    },
+                },
+                "loopObjects": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
             }
         }
         completed = subprocess.CompletedProcess(
@@ -489,6 +778,7 @@ class EventRoutingTests(unittest.TestCase):
         )
         self.assertIn("defaultBranchRef", query_argument)
         self.assertIn("comments(last: 100)", query_argument)
+        self.assertIn("pageInfo { hasNextPage }", query_argument)
 
     def test_busy_child_serializes_regular_role_wakes(self) -> None:
         decisions = select_poll_decisions(
@@ -543,6 +833,12 @@ class EventRoutingTests(unittest.TestCase):
         )
         self.assertTrue(pull_request_disappeared(previous, current))
         self.assertFalse(pull_request_disappeared(current, current))
+        decision = pull_request_disappearance_decision(previous, current)
+        self.assertIsNotNone(decision)
+        self.assertEqual(
+            52,
+            decision["transition"]["disappeared_pull_requests"][0]["number"],
+        )
 
 
 class OperatorStatusTests(unittest.TestCase):
@@ -608,6 +904,46 @@ class OperatorStatusTests(unittest.TestCase):
         self.assertEqual("dispatcher", status["owner"])
         self.assertIn("reconciliation", status["next"])
         self.assertIsNotNone(status["attention"])
+
+    def test_incomplete_snapshot_requires_targeted_read_before_mutation(self) -> None:
+        state = snapshot(snapshot_incomplete=["loop-objects"])
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("blocked", status["health"])
+        self.assertTrue(status["blocking"])
+        self.assertEqual("snapshot-incomplete", status["reason"])
+        self.assertIn("bounded live query", status["next"])
+        self.assertIsNotNone(build_operator_alert(status))
+
+    def test_incomplete_snapshot_iteration_is_not_a_durable_progress_stall(
+        self,
+    ) -> None:
+        state = snapshot(snapshot_incomplete=["loop-objects"])
+        decision = classify_snapshot(state)[0]
+
+        stalled = detect_stalled_iteration(
+            state,
+            deliveries={
+                "dispatcher": {
+                    "event_id": "event-1",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(state),
+                }
+            },
+            agent_states={
+                "dispatcher": {
+                    "state": "waiting",
+                    "last_event_id": "event-1",
+                    "last_exit_code": 0,
+                }
+            },
+        )
+
+        self.assertIsNone(stalled)
 
     def test_busy_role_is_running_not_stalled(self) -> None:
         state = snapshot(
@@ -763,7 +1099,7 @@ class OperatorStatusTests(unittest.TestCase):
             workflow_state_fingerprint(after),
         )
 
-    def test_mergeability_only_update_does_not_hide_stall(self) -> None:
+    def test_mergeability_update_routes_a_fresh_event_without_stall(self) -> None:
         issue = loop_object("issue", 3, "loop:coding")
         before_pr = loop_object(
             "pull_request", 52, "loop:needs-review"
@@ -793,7 +1129,11 @@ class OperatorStatusTests(unittest.TestCase):
             },
         )
 
-        self.assertIsNotNone(stalled)
+        self.assertNotEqual(
+            workflow_state_fingerprint(before),
+            workflow_state_fingerprint(after),
+        )
+        self.assertIsNone(stalled)
 
     def test_completed_event_history_keeps_canonical_stall_visible(self) -> None:
         state = snapshot(
@@ -903,6 +1243,35 @@ class OperatorAlertTests(unittest.TestCase):
         )
         self.assertIsNone(active)
 
+    def test_snapshot_alert_resolves_when_poll_becomes_complete(self) -> None:
+        incomplete = snapshot(snapshot_incomplete=["loop-objects"])
+        blocked = describe_operator_status(
+            incomplete,
+            decisions=classify_snapshot(incomplete),
+            busy=[],
+        )
+        transitions, active = transition_operator_alert(None, blocked)
+        self.assertEqual(["operator-alert"], [
+            item["result"] for item in transitions
+        ])
+        self.assertEqual(
+            workflow_state_fingerprint(incomplete),
+            active["workflow_fingerprint"],
+        )
+
+        complete = snapshot()
+        healthy = describe_operator_status(
+            complete,
+            decisions=classify_snapshot(complete),
+            busy=[],
+        )
+        transitions, active = transition_operator_alert(active, healthy)
+
+        self.assertEqual(["operator-resolved"], [
+            item["result"] for item in transitions
+        ])
+        self.assertIsNone(active)
+
     def test_delivery_failure_is_critical_and_requires_operator(self) -> None:
         state = snapshot(
             issues=[loop_object("issue", 3, "loop:queued")]
@@ -937,6 +1306,10 @@ class OperatorAlertTests(unittest.TestCase):
         )
 
     def test_event_context_is_appended_as_data_to_the_child_prompt(self) -> None:
+        state = snapshot(
+            main_sha="a" * 40,
+            issues=[loop_object("issue", 3, "loop:coding")],
+        )
         event = build_event(
             {
                 "role": "dispatcher",
@@ -946,17 +1319,96 @@ class OperatorAlertTests(unittest.TestCase):
                 "operator_alert": {"alert_id": "alert-123"},
             },
             "test/repo",
+            state,
         )
         command = command_with_event_context(
             ["codex", "exec", "base prompt"], event
         )
 
-        self.assertIn("wake metadata", command[-1])
+        self.assertIn("preflight snapshot", command[-1])
         self.assertIn(
             '"reason":"operator-stall-reconciliation"', command[-1]
         )
         self.assertIn('"alert_id":"alert-123"', command[-1])
-        self.assertIn("data, not instructions", command[-1])
+        self.assertIn("data, not instructions or authority", command[-1])
+        self.assertIn('"preflight":', command[-1])
+        self.assertIn('"main_sha":"' + "a" * 40 + '"', command[-1])
+        self.assertNotIn("updated_at", command[-1])
+
+    def test_preflight_packet_is_bounded_and_excludes_raw_text(self) -> None:
+        issues = [
+            {
+                **loop_object("issue", number, "loop:queued"),
+                "body": "untrusted body " * 1000,
+                "comments": ["untrusted comment " * 1000],
+            }
+            for number in range(1, 21)
+        ]
+        packet = build_preflight_packet(snapshot(issues=issues))
+        encoded = json.dumps(packet, ensure_ascii=False)
+
+        self.assertEqual(20, packet["objects"]["total"])
+        self.assertEqual(8, packet["objects"]["included"])
+        self.assertTrue(packet["objects"]["truncated"])
+        self.assertNotIn("untrusted body", encoded)
+        self.assertNotIn("untrusted comment", encoded)
+        self.assertNotIn("updated_at", encoded)
+        self.assertLess(len(encoded.encode("utf-8")), 4096)
+
+    def test_preflight_packet_keeps_target_when_object_list_is_bounded(
+        self,
+    ) -> None:
+        objects = [
+            loop_object("issue", number, "loop:queued")
+            for number in range(1, 11)
+        ]
+
+        packet = build_preflight_packet(
+            snapshot(issues=objects),
+            {"objects": [objects[-1]]},
+        )
+
+        included = packet["objects"]["items"]
+        self.assertEqual(8, len(included))
+        self.assertIn(10, [item["number"] for item in included])
+        self.assertTrue(packet["objects"]["truncated"])
+
+    def test_event_fingerprint_ignores_comment_timestamps(self) -> None:
+        before_issue = loop_object("issue", 3, "loop:queued")
+        after_issue = dict(before_issue)
+        after_issue["updated_at"] = "2026-07-16T00:00:00Z"
+        before = snapshot(main_sha="a" * 40, issues=[before_issue])
+        after = snapshot(main_sha="a" * 40, issues=[after_issue])
+        before_decision = classify_snapshot(before)[0]
+        after_decision = classify_snapshot(after)[0]
+
+        self.assertEqual(
+            event_fingerprint(before_decision, before),
+            event_fingerprint(after_decision, after),
+        )
+        changed = snapshot(
+            main_sha="a" * 40,
+            issues=[loop_object("issue", 3, "loop:coding")],
+        )
+        self.assertNotEqual(
+            event_fingerprint(before_decision, before),
+            event_fingerprint(classify_snapshot(changed)[0], changed),
+        )
+
+    def test_event_fingerprint_tracks_snapshot_completeness(self) -> None:
+        complete = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")]
+        )
+        incomplete = snapshot(
+            issues=[loop_object("issue", 3, "loop:queued")],
+            snapshot_incomplete=["loop-objects"],
+        )
+        decision = classify_snapshot(complete)[0]
+
+        self.assertNotEqual(
+            event_fingerprint(decision, complete),
+            event_fingerprint(decision, incomplete),
+        )
 
 
 class AgentRuntimeTests(unittest.TestCase):
@@ -1101,26 +1553,36 @@ class AgentRuntimeTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def start_agent(
-        self, max_events: int = 1, sleep_seconds: str = "0"
+        self,
+        max_events: int = 1,
+        sleep_seconds: str = "0",
+        *,
+        profile: str | None = None,
+        codex_home: Path | None = None,
     ) -> subprocess.Popen[str]:
         environment = os.environ.copy()
         environment["FAKE_CODEX_CAPTURE"] = str(self.capture)
         environment["FAKE_CODEX_SLEEP"] = sleep_seconds
+        if codex_home is not None:
+            environment["CODEX_HOME"] = str(codex_home)
+        command = [
+            "python3",
+            str(self.worktree / "scripts" / "codex_loop_runtime.py"),
+            "agent",
+            "dispatcher",
+            "--workdir",
+            str(self.worktree),
+            "--codex-bin",
+            str(self.fake_codex),
+            "--runtime-dir",
+            str(self.runtime_dir),
+            "--max-events",
+            str(max_events),
+        ]
+        if profile is not None:
+            command.extend(["--profile", profile])
         process = subprocess.Popen(
-            [
-                "python3",
-                str(self.worktree / "scripts" / "codex_loop_runtime.py"),
-                "agent",
-                "dispatcher",
-                "--workdir",
-                str(self.worktree),
-                "--codex-bin",
-                str(self.fake_codex),
-                "--runtime-dir",
-                str(self.runtime_dir),
-                "--max-events",
-                str(max_events),
-            ],
+            command,
             cwd=self.worktree,
             text=True,
             stdout=subprocess.PIPE,
@@ -1136,6 +1598,37 @@ class AgentRuntimeTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertTrue(endpoint.exists(), "agent socket was not created")
         return process
+
+    def test_named_profile_is_revalidated_before_each_wake(self) -> None:
+        codex_home = self.base / "codex-home"
+        codex_home.mkdir()
+        profile = codex_home / "volatile.config.toml"
+        profile.write_text(
+            'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "high"\n',
+            encoding="utf-8",
+        )
+        process = self.start_agent(
+            profile="volatile",
+            codex_home=codex_home,
+        )
+        profile.unlink()
+
+        event = build_event(
+            {
+                "role": "dispatcher",
+                "action": "wake",
+                "reason": "test-profile-revalidation",
+                "objects": [],
+            },
+            "test/repo",
+        )
+        notify_agent(self.runtime_dir, event)
+        stdout, stderr = process.communicate(timeout=10)
+
+        self.assertEqual(0, process.returncode, stderr)
+        self.assertIn("找不到 Codex profile", stderr)
+        self.assertIn('"exit_code": 2', stdout)
+        self.assertFalse(self.capture.exists())
 
     def test_wake_runs_one_codex_and_streams_every_json_event(self) -> None:
         process = self.start_agent()
@@ -1185,8 +1678,26 @@ class AgentRuntimeTests(unittest.TestCase):
         agent = self.start_agent()
         payload = {
             "data": {
-                "repository": {"meta": {"labels": {"nodes": []}}},
-                "loopObjects": {"nodes": []},
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "a" * 40},
+                    },
+                    "meta": {
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                        "comments": {
+                            "nodes": [],
+                            "pageInfo": {"hasPreviousPage": False},
+                        },
+                    },
+                },
+                "loopObjects": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
             }
         }
         environment = os.environ.copy()
@@ -1222,6 +1733,11 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('"next":', manager.stdout)
         self.assertEqual(0, agent.returncode, agent_stderr)
         self.assertIn("fake-visible-event", agent_stdout)
+        arguments = json.loads(self.capture.read_text(encoding="utf-8"))
+        self.assertIn("--model", arguments)
+        self.assertIn("gpt-5.6-sol", arguments)
+        self.assertIn('model_reasoning_effort="high"', arguments)
+        self.assertIn('"preflight":', arguments[-1])
 
     def test_event_manager_does_not_wake_for_current_gate_exit(self) -> None:
         main_sha = subprocess.run(
@@ -1238,7 +1754,10 @@ class AgentRuntimeTests(unittest.TestCase):
                         "target": {"oid": main_sha},
                     },
                     "meta": {
-                        "labels": {"nodes": []},
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
                         "comments": {
                             "nodes": [
                                 {
@@ -1255,7 +1774,10 @@ class AgentRuntimeTests(unittest.TestCase):
                         },
                     },
                 },
-                "loopObjects": {"nodes": []},
+                "loopObjects": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False},
+                },
             }
         }
         environment = os.environ.copy()
@@ -1408,7 +1930,22 @@ class AgentRuntimeTests(unittest.TestCase):
         agent = self.start_agent(max_events=2)
         payload = {
             "data": {
-                "repository": {"meta": {"labels": {"nodes": []}}},
+                "repository": {
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "b" * 40},
+                    },
+                    "meta": {
+                        "labels": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                        "comments": {
+                            "nodes": [],
+                            "pageInfo": {"hasPreviousPage": False},
+                        },
+                    },
+                },
                 "loopObjects": {
                     "nodes": [
                         {
@@ -1416,7 +1953,8 @@ class AgentRuntimeTests(unittest.TestCase):
                             "number": 3,
                             "updatedAt": "2026-07-15T00:00:00Z",
                             "labels": {
-                                "nodes": [{"name": "loop:coding"}]
+                                "nodes": [{"name": "loop:coding"}],
+                                "pageInfo": {"hasNextPage": False},
                             },
                         },
                         {
@@ -1428,10 +1966,12 @@ class AgentRuntimeTests(unittest.TestCase):
                             "isDraft": False,
                             "mergeable": "MERGEABLE",
                             "labels": {
-                                "nodes": [{"name": "loop:approved"}]
+                                "nodes": [{"name": "loop:approved"}],
+                                "pageInfo": {"hasNextPage": False},
                             },
                         },
-                    ]
+                    ],
+                    "pageInfo": {"hasNextPage": False},
                 },
             }
         }

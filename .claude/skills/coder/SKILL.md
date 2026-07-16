@@ -8,16 +8,35 @@ description: agent 閉環的 one-shot 實作角色——恢復一個 interrupted
 協定正本：`docs/agent-loop.md`。每次喚醒只處理一個 unblocked 工作後退出；不 sleep、
 輪詢、建立排程、合併 PR、push `main` 或設定 `loop:approved`。
 
+<!-- loop-common-contract:start -->
+## 共同低 token 安全契約
+
+1. Client 已注入 trusted runner 驗證過的 `AGENTS.md`，算本輪完整讀取；注入缺失或來源
+   不明就 fail closed，且不得再次輸出整份 `AGENTS.md`。
+2. `bounded preflight` 只縮小候選，不是授權或 durable state。直接鎖定其中 object；
+   `snapshot_incomplete` 本身阻斷；object truncation 只補 target 缺口，
+   `meta_comments_truncated` 只影響 gate-exit／舊 marker 查找。
+3. Active-gate 節、authoring guide、target Issue／PR 各只讀一次；skill 已是本角色協定投影。
+   只有歧義才讀 `docs/agent-loop.md` 對應段落；正常 role 不讀 operations runbook。
+4. mutation 前做一次 bounded live revalidation：pause、main、target labels，PR 再核對
+   head／base／draft／mergeability。只對缺口分頁；預設禁止完整 comments/history 與
+   all-issues 查詢。
+5. Mutation 結果不明才重查。成功只留 exit／test count／必要 hash 的 compact summary；
+   失敗才輸出 bounded diagnostics；結尾只輸出一個 compact summary。
+<!-- loop-common-contract:end -->
+
 ## 每輪程序
 
-1. 先查 Meta Issue #1 的 `loop:paused`；存在就無副作用回報 paused。
-2. `git fetch origin main --prune`，記錄完整 `MAIN_SHA`。完整讀取該 snapshot 的
-   `AGENTS.md`、curriculum active gate、authoring guide、loop 協定，以及 live 派工
-   Issue／PR。Gate 真相不一致或派工越界時加 blocked 並退出。
-3. 確認目前是控制檔與 `origin/main` 一致的 trusted runner；不要在 runner checkout
-   task branch。在另一個 task worktree 保留／恢復任務變更。依序只選一件：
-   unblocked `changes-requested` PR → 可從署名 claim、remote branch／PR 唯一恢復的
-   `coding` Issue → 最舊有效 `queued` Issue → no-op。無法唯一恢復就 blocked，不重做。
+1. 先讀 `bounded preflight`；若已 paused 就無副作用回報 paused。只處理 packet 指向的
+   Issue／PR；`snapshot_incomplete` 時不依部分資料 claim 或交審。
+2. `git fetch origin main --prune`，記錄完整 `MAIN_SHA`，依共同契約讀 active gate、
+   authoring guide 與對應 Issue／PR。只取最新有效派工、自己的 claim／handoff，或最新
+   Reviewer verdict 及其全部 findings；歧義才分頁。Gate 不一致或派工越界時 blocked。
+3. 以一次 bounded live query 比對 pause、main、target labels／head，再確認目前是控制檔
+   與 `origin/main` 一致的 trusted runner；不要在 runner checkout
+   task branch。在另一個 task worktree 保留／恢復任務變更。只依 packet target 的 live
+   state 處理 `changes-requested`、可唯一恢復的 `coding` 或有效 `queued`；target 不合格
+   就 no-op，不另列 Issues／PR。無法唯一恢復就 blocked，不重做。
 4. Claim queued 前決定唯一 branch；先留下含 `Issue`、完整 `Branch`、
    `Claimed-Main` 與 slice 的 `— Coder` durable 留言，再把 primary state 轉為 coding。
    在 task worktree 從最新 main 建立或恢復聚焦分支，只改派工 slice。
