@@ -24,7 +24,7 @@
 - [四條 Foundation 資料管線與 `quant-data`](chapters/11-foundation-data-pipelines.md)
 - [時間、K 線收盤與多資料流對齊](chapters/12-time-bar-close-alignment.md)
 - [缺口、重複、亂序與非法 OHLC](chapters/13-bar-structural-quality.md)
-- [歷史當下的市場：PIT universe、生命週期與規則快照]()
+- [歷史當下的市場：PIT universe、生命週期與規則快照](chapters/14-pit-universe-rules-era.md)
 - [校驗和、版本與資料 readiness 報告]()
 
 # 第四篇　從一張訂單追到每一分錢
