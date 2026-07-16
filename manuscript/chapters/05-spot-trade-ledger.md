@@ -75,17 +75,21 @@ Binance 官方 Spot API 的 `exchangeInfo` 回應把兩者分成 `baseAsset` 與
 
 令 `p` 是價格、`q` 是非負成交數量，名義價值（notional）為：
 
-```text
-N = p × q
-
-(USDT/BTC) × BTC = USDT
-```
+\\[
+\begin{aligned}
+N &= p \times q \\\\
+\left(\frac{\mathrm{USDT}}{\mathrm{BTC}}\right)\times \mathrm{BTC}
+  &= \mathrm{USDT}
+\end{aligned}
+\\]
 
 因此本例買入名義價值為：
 
-```text
-20,000.00 USDT/BTC × 0.25 BTC = 5,000.00 USDT
-```
+\\[
+20{,}000.00\ \frac{\mathrm{USDT}}{\mathrm{BTC}}
+\times 0.25\ \mathrm{BTC}
+= 5{,}000.00\ \mathrm{USDT}
+\\]
 
 名義價值是這筆成交交換了多少報價資產，不是獲利。賣出時也用正的名義價值；
 現金流方向另外記錄，不能把價格或原始成交數量寫成負數來暗示方向。
@@ -94,11 +98,13 @@ N = p × q
 
 本章把每次成交造成的部位變化記為 `ΔQ`：
 
-```text
-買入：ΔQ = +q
-賣出：ΔQ = -q
-累積部位：Q_after = Q_before + ΔQ
-```
+\\[
+\begin{aligned}
+\text{買入：}\quad \Delta Q &= +q \\\\
+\text{賣出：}\quad \Delta Q &= -q \\\\
+Q\_{\mathrm{after}} &= Q\_{\mathrm{before}} + \Delta Q
+\end{aligned}
+\\]
 
 所以買入 `0.25 BTC` 後，`Q = +0.25 BTC`；全部賣出時，`ΔQ = -0.25 BTC`，
 最後 `Q = 0 BTC`。原始成交數量 `q` 仍然是正數。
@@ -111,20 +117,23 @@ N = p × q
 
 令 `C` 是 USDT 餘額，`m` 是用來重估的 BTC 價格：
 
-```text
-部位價值 V = Q × m                 [USDT]
-標記權益 E = C + V                 [USDT]
-未實現損益 U = (m - p_buy) × Q     [USDT]
-```
+\\[
+\begin{aligned}
+V &= Q \times m &&[\mathrm{USDT}] \\\\
+E &= C + V &&[\mathrm{USDT}] \\\\
+U &= (m-p\_{\mathrm{buy}})\times Q &&[\mathrm{USDT}]
+\end{aligned}
+\\]
 
 此處的 `m` 只是本例固定的現貨重估輸入，不是第 8 章會討論的永續合約標記價格。
 標記權益是「若用 `m` 換算」的估值，不等於錢包現金，也不保證能以 `m` 全數成交。
 
 本例只有一個買入批次，且最後一次全部賣出，所以已實現損益可以寫成：
 
-```text
-R = (p_sell - p_buy) × q            [USDT]
-```
+\\[
+R=(p\_{\mathrm{sell}}-p\_{\mathrm{buy}})\times q
+\quad[\mathrm{USDT}]
+\\]
 
 這條式子的適用前提是同一批數量、全部平掉、沒有費用或其他現金流。多批買入時
 必須先固定成本基礎方法；稅務成本認定也不能由本章公式代替。完整符號與適用前提
@@ -134,21 +143,28 @@ R = (p_sell - p_buy) × q            [USDT]
 
 ### `t0`：初始狀態
 
-```text
-C0 = 10,000.00 USDT
-Q0 = 0 BTC
-E0 = 10,000.00 USDT
-```
+\\[
+\begin{aligned}
+C\_0 &= 10{,}000.00\ \mathrm{USDT} \\\\
+Q\_0 &= 0\ \mathrm{BTC} \\\\
+E\_0 &= 10{,}000.00\ \mathrm{USDT}
+\end{aligned}
+\\]
 
 ### `t1`：買入 `0.25 BTC`
 
-```text
-買入名義價值 = 0.25 BTC × 20,000.00 USDT/BTC
-             = 5,000.00 USDT
-
-C1 = 10,000.00 - 5,000.00 = 5,000.00 USDT
-Q1 = 0 + 0.25 = 0.25 BTC
-```
+\\[
+\begin{aligned}
+N\_{\mathrm{buy}}
+  &= 0.25\ \mathrm{BTC}
+     \times 20{,}000.00\ \frac{\mathrm{USDT}}{\mathrm{BTC}} \\\\
+  &= 5{,}000.00\ \mathrm{USDT} \\\\
+C\_1 &= 10{,}000.00-5{,}000.00
+     = 5{,}000.00\ \mathrm{USDT} \\\\
+Q\_1 &= 0+0.25
+     = 0.25\ \mathrm{BTC}
+\end{aligned}
+\\]
 
 以成交價重估時，`0.25 BTC` 價值仍是 `5,000.00 USDT`，因此 `E1` 仍為
 `10,000.00 USDT`。只是資產組成從全 USDT 變成 USDT 加 BTC；在本章零成本假設下，
@@ -156,25 +172,36 @@ Q1 = 0 + 0.25 = 0.25 BTC
 
 ### `t2`：價格升至 `21,200.00 USDT/BTC`
 
-```text
-V2 = 0.25 × 21,200.00 = 5,300.00 USDT
-U2 = (21,200.00 - 20,000.00) × 0.25 = 300.00 USDT
-E2 = 5,000.00 + 5,300.00 = 10,300.00 USDT
-```
+\\[
+\begin{aligned}
+V\_2 &= 0.25\times21{,}200.00
+     = 5{,}300.00\ \mathrm{USDT} \\\\
+U\_2 &= (21{,}200.00-20{,}000.00)\times0.25
+     = 300.00\ \mathrm{USDT} \\\\
+E\_2 &= 5{,}000.00+5{,}300.00
+     = 10{,}300.00\ \mathrm{USDT}
+\end{aligned}
+\\]
 
 此時 `C2` 仍是 `5,000.00 USDT`。`300.00 USDT` 是未實現損益；把它再加進
 現金，或同時加進部位價值與權益，會重複計算。
 
 ### `t3`：以 `20,800.00 USDT/BTC` 全部賣出
 
-```text
-賣出名義價值 = 0.25 × 20,800.00 = 5,200.00 USDT
-C3 = 5,000.00 + 5,200.00 = 10,200.00 USDT
-Q3 = 0.25 - 0.25 = 0 BTC
-R3 = (20,800.00 - 20,000.00) × 0.25 = 200.00 USDT
-U3 = 0 USDT
-E3 = 10,200.00 USDT
-```
+\\[
+\begin{aligned}
+N\_{\mathrm{sell}} &= 0.25\times20{,}800.00
+                    = 5{,}200.00\ \mathrm{USDT} \\\\
+C\_3 &= 5{,}000.00+5{,}200.00
+     = 10{,}200.00\ \mathrm{USDT} \\\\
+Q\_3 &= 0.25-0.25
+     = 0\ \mathrm{BTC} \\\\
+R\_3 &= (20{,}800.00-20{,}000.00)\times0.25
+     = 200.00\ \mathrm{USDT} \\\\
+U\_3 &= 0\ \mathrm{USDT} \\\\
+E\_3 &= 10{,}200.00\ \mathrm{USDT}
+\end{aligned}
+\\]
 
 `t2` 的 `300.00 USDT` 並沒有被鎖定。實際賣出價低於重估價，所以最後實現的是
 `200.00 USDT`。已實現與未實現損益是狀態分類，不是兩筆可以相加的收入。
@@ -195,21 +222,33 @@ E3 = 10,200.00 USDT
 
 第一組只檢查資產流，不使用市場重估：
 
-```text
-最終 BTC = 初始 BTC + 買入 BTC - 賣出 BTC
-          = 0 + 0.25 - 0.25 = 0 BTC
-
-最終 USDT = 初始 USDT - 買入名義價值 + 賣出名義價值
-           = 10,000.00 - 5,000.00 + 5,200.00
-           = 10,200.00 USDT
-```
+\\[
+\begin{aligned}
+Q\_{\mathrm{final}}
+  &= Q\_{\mathrm{initial}}+Q\_{\mathrm{buy}}-Q\_{\mathrm{sell}} \\\\
+  &= 0+0.25-0.25
+   = 0\ \mathrm{BTC} \\\\
+C\_{\mathrm{final}}
+  &= C\_{\mathrm{initial}}-N\_{\mathrm{buy}}+N\_{\mathrm{sell}} \\\\
+  &= 10{,}000.00-5{,}000.00+5{,}200.00 \\\\
+  &= 10{,}200.00\ \mathrm{USDT}
+\end{aligned}
+\\]
 
 第二組檢查損益與權益分類：
 
-```text
-持有時：E2 = E0 + U2 = 10,000.00 + 300.00 = 10,300.00 USDT
-平倉後：E3 = E0 + R3 = 10,000.00 + 200.00 = 10,200.00 USDT
-```
+\\[
+\begin{aligned}
+\text{持有時：}\quad
+E\_2 &= E\_0+U\_2
+    = 10{,}000.00+300.00
+    = 10{,}300.00\ \mathrm{USDT} \\\\
+\text{平倉後：}\quad
+E\_3 &= E\_0+R\_3
+    = 10{,}000.00+200.00
+    = 10{,}200.00\ \mathrm{USDT}
+\end{aligned}
+\\]
 
 任一等式不成立，都先停止：常見根因是交易方向寫反、把 BTC 與 USDT 相加、把
 未實現損益當成現金，或漏掉一筆外部入出金。這裡的「守恆」是依明示交易與外部

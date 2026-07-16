@@ -9,3 +9,7 @@ build-dir = "book"
 create-missing = false
 
 [output.html]
+additional-js = [
+  "theme/mathjax-config.js",
+  "theme/mathjax/tex-svg.js",
+]

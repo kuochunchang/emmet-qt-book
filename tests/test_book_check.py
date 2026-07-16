@@ -138,7 +138,20 @@ build-dir = "book"
 create-missing = false
 
 [output.html]
+additional-js = [
+  "theme/mathjax-config.js",
+  "theme/mathjax/tex-svg.js",
+]
 """,
+        )
+        repository_root = Path(__file__).resolve().parents[1]
+        self.write(
+            "theme/mathjax-config.js",
+            (repository_root / "theme/mathjax-config.js").read_text(encoding="utf-8"),
+        )
+        self.write_bytes(
+            "theme/mathjax/tex-svg.js",
+            (repository_root / "theme/mathjax/tex-svg.js").read_bytes(),
         )
         self.write(
             "book-check.toml",
@@ -180,6 +193,12 @@ required = ["chapters/*.md"]
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        return path
+
+    def write_bytes(self, relative: str, content: bytes) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
         return path
 
     def read(self, relative: str) -> str:
@@ -363,6 +382,38 @@ class SourceCheckTests(unittest.TestCase):
 """,
         )
         self.assertEqual([], [str(item) for item in self.validate()])
+
+    def test_math_config_and_delimiters_fail_closed(self) -> None:
+        original_config = self.fixture.read("book.toml")
+        config = original_config.replace(
+            'additional-js = [\n  "theme/mathjax-config.js",\n'
+            '  "theme/mathjax/tex-svg.js",\n]\n',
+            "mathjax-support = true\n",
+        )
+        self.fixture.write("book.toml", config)
+        found = codes(self.validate())
+        self.assertIn("CONFIG_MATHJAX_CDN", found)
+        self.assertIn("CONFIG_MATHJAX_JS", found)
+
+        self.fixture.write("book.toml", original_config)
+        path = "manuscript/chapters/01.md"
+        self.fixture.write(
+            path,
+            self.fixture.read(path)
+            + "\n$$ x = 1 $$\n"
+            + "\\\\[\nx=1\n"
+            + "\\\\( x_i \\\\)\n",
+        )
+        found = codes(self.validate())
+        self.assertIn("MATH_DELIMITER_UNSUPPORTED", found)
+        self.assertIn("MATH_DISPLAY_UNCLOSED", found)
+        self.assertIn("MATH_SUBSCRIPT_ESCAPE", found)
+
+        self.fixture.write(
+            path,
+            self.fixture.read(path).replace("x_i", "x\\_i") + "\\\\]\n",
+        )
+        self.assertNotIn("MATH_SUBSCRIPT_ESCAPE", codes(self.validate()))
 
     def test_missing_and_duplicate_summary_targets_fail_for_the_right_reason(
         self,

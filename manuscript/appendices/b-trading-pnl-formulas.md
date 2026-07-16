@@ -68,11 +68,13 @@ position、名義價值、未實現損益、資金費現金流、槓桿、保證
 
 ## 名義價值與部位更新
 
-```text
-N = p × q                       [quote]
-ΔQ = s × q                      [base]
-Q_after = Q_before + ΔQ         [base]
-```
+\\[
+\begin{aligned}
+N&=p\times q &&[\mathrm{quote}] \\\\
+\Delta Q&=s\times q &&[\mathrm{base}] \\\\
+Q\_{\mathrm{after}}&=Q\_{\mathrm{before}}+\Delta Q &&[\mathrm{base}]
+\end{aligned}
+\\]
 
 買賣兩邊的 `N` 都是正數；方向由 `s`、`ΔQ` 與現金流表達。對沒有借貸的現貨帳戶，
 若更新後 `Q_after < 0`，應拒絕案例，不得直接解釋成空頭部位。
@@ -81,15 +83,19 @@ Q_after = Q_before + ΔQ         [base]
 
 買入：
 
-```text
-C_after = C_before - p_buy × q  [quote]
-```
+\\[
+C\_{\mathrm{after}}
+=C\_{\mathrm{before}}-p\_{\mathrm{buy}}\times q
+\quad[\mathrm{quote}]
+\\]
 
 賣出：
 
-```text
-C_after = C_before + p_sell × q [quote]
-```
+\\[
+C\_{\mathrm{after}}
+=C\_{\mathrm{before}}+p\_{\mathrm{sell}}\times q
+\quad[\mathrm{quote}]
+\\]
 
 這兩式只適用於手續費、spread、滑點、借貸利息、稅務與外部入出金皆明確為零的
 教學案例。任一項存在時，必須新增獨立現金流欄位，不得暗中塞進價格或數量。
@@ -98,11 +104,13 @@ C_after = C_before + p_sell × q [quote]
 
 對單一買入批次、尚未賣出的多頭現貨：
 
-```text
-V = Q × m                       [quote]
-U = (m - p_buy) × Q             [quote]
-E = C + V                       [quote]
-```
+\\[
+\begin{aligned}
+V&=Q\times m &&[\mathrm{quote}] \\\\
+U&=(m-p\_{\mathrm{buy}})\times Q &&[\mathrm{quote}] \\\\
+E&=C+V &&[\mathrm{quote}]
+\end{aligned}
+\\]
 
 `V` 是全部部位按 `m` 換算的價值；`U` 只取相對成本的差。因為 `V` 已經包含成本與
 估值變化，計算 `E` 時不能再把 `U` 加一次。
@@ -111,12 +119,14 @@ E = C + V                       [quote]
 
 對同一買入批次、賣出數量恰等於買入數量、零成本且沒有其他現金流的案例：
 
-```text
-R = (p_sell - p_buy) × q        [quote]
-Q_final = 0                     [base]
-U_final = 0                     [quote]
-E_final = C_final = E_initial + R
-```
+\\[
+\begin{aligned}
+R&=(p\_{\mathrm{sell}}-p\_{\mathrm{buy}})\times q &&[\mathrm{quote}] \\\\
+Q\_{\mathrm{final}}&=0 &&[\mathrm{base}] \\\\
+U\_{\mathrm{final}}&=0 &&[\mathrm{quote}] \\\\
+E\_{\mathrm{final}}&=C\_{\mathrm{final}}=E\_{\mathrm{initial}}+R
+\end{aligned}
+\\]
 
 多批買入、部分賣出或資產轉入時，必須先指定成本基礎與批次歸屬；本式不能自行
 決定加權平均、FIFO 或任何稅務認定。
@@ -125,22 +135,26 @@ E_final = C_final = E_initial + R
 
 在零成本、無外部入出金的完整買入再賣出案例中：
 
-```text
-Q_final = Q_initial + Σ(buy q) - Σ(sell q)
-C_final = C_initial - Σ(buy N) + Σ(sell N)
-```
+\\[
+\begin{aligned}
+Q\_{\mathrm{final}}
+  &=Q\_{\mathrm{initial}}+\sum\_{\mathrm{buy}}q-\sum\_{\mathrm{sell}}q \\\\
+C\_{\mathrm{final}}
+  &=C\_{\mathrm{initial}}-\sum\_{\mathrm{buy}}N+\sum\_{\mathrm{sell}}N
+\end{aligned}
+\\]
 
 對只有一個尚未處分批次的持有時點：
 
-```text
-E_marked = E_initial + U
-```
+\\[
+E\_{\mathrm{marked}}=E\_{\mathrm{initial}}+U
+\\]
 
 全部處分後：
 
-```text
-E_final = E_initial + R
-```
+\\[
+E\_{\mathrm{final}}=E\_{\mathrm{initial}}+R
+\\]
 
 第一組核對資產流，第二組核對損益分類。兩組必須同時成立；其中一組通過不能
 抵銷另一組的差異。
@@ -149,20 +163,25 @@ E_final = E_initial + R
 
 對固定同一時點的最佳 bid `b` 與最佳 ask `a`：
 
-```text
-spread S = a - b                         [quote/base]
-mid m = (a + b) / 2                      [quote/base]
-```
+\\[
+\begin{aligned}
+S&=a-b &&[\mathrm{quote/base}] \\\\
+m&=\frac{a+b}{2} &&[\mathrm{quote/base}]
+\end{aligned}
+\\]
 
 在第 6 章的非負不利滑點情境中：
 
-```text
-買入半邊 spread 成本 = (a - m) × q      [quote]
-買入滑點成本 = (p_buy - a) × q          [quote]
-
-賣出半邊 spread 成本 = (m - b) × q      [quote]
-賣出滑點成本 = (b - p_sell) × q         [quote]
-```
+\\[
+\begin{aligned}
+K\_{\mathrm{spread,buy}}&=(a-m)\times q &&[\mathrm{quote}] \\\\
+K\_{\mathrm{slippage,buy}}&=(p\_{\mathrm{buy}}-a)\times q
+  &&[\mathrm{quote}] \\\\
+K\_{\mathrm{spread,sell}}&=(m-b)\times q &&[\mathrm{quote}] \\\\
+K\_{\mathrm{slippage,sell}}&=(b-p\_{\mathrm{sell}})\times q
+  &&[\mathrm{quote}]
+\end{aligned}
+\\]
 
 這裡的 `m`、`a`、`b` 必須屬於各自進場或出場時點，不能把不同時點的報價拼成
 一個 spread。若成交優於參考報價，保留帶方向的 price improvement；不要取絕對值
@@ -171,41 +190,51 @@ mid m = (a + b) / 2                      [quote/base]
 若毛損益已直接使用 `p_buy` 與 `p_sell`，上述價格摩擦已包含在成交價，不能再
 扣一次。只有從參考中間價毛損益開始時，才以 spread／滑點歸因走到成交價毛損益：
 
-```text
-參考中間價毛損益 - spread 成本 - 滑點成本
-= 實際成交價毛損益
-```
+\\[
+G\_{\mathrm{mid}}-K\_{\mathrm{spread}}-K\_{\mathrm{slippage}}
+=G\_{\mathrm{fill}}
+\\]
 
 ## 手續費與計費資產
 
 費率以成交名義價值計算且費用扣 quote 時：
 
-```text
-F_quote = p × q × r                       [quote]
-```
+\\[
+F\_{\mathrm{quote}}=p\times q\times r
+\quad[\mathrm{quote}]
+\\]
 
 第 6 章買入費用扣 base 的情境則是：
 
-```text
-F_buy,base = q × r_buy                    [base]
-q_net = q - F_buy,base
-      = q × (1 - r_buy)                   [base]
-```
+\\[
+\begin{aligned}
+F\_{\mathrm{buy,base}}&=q\times r\_{\mathrm{buy}} &&[\mathrm{base}] \\\\
+q\_{\mathrm{net}}
+  &=q-F\_{\mathrm{buy,base}}
+   =q(1-r\_{\mathrm{buy}}) &&[\mathrm{base}]
+\end{aligned}
+\\]
 
 全部賣出 `q_net`，且賣出費用扣 quote：
 
-```text
-N_exit = q_net × p_sell                   [quote]
-F_sell,quote = N_exit × r_sell            [quote]
-C_final = C_initial - q × p_buy
-          + N_exit - F_sell,quote          [quote]
-```
+\\[
+\begin{aligned}
+N\_{\mathrm{exit}}&=q\_{\mathrm{net}}p\_{\mathrm{sell}} &&[\mathrm{quote}] \\\\
+F\_{\mathrm{sell,quote}}&=N\_{\mathrm{exit}}r\_{\mathrm{sell}}
+  &&[\mathrm{quote}] \\\\
+C\_{\mathrm{final}}
+  &=C\_{\mathrm{initial}}-q\,p\_{\mathrm{buy}}
+    +N\_{\mathrm{exit}}-F\_{\mathrm{sell,quote}} &&[\mathrm{quote}]
+\end{aligned}
+\\]
 
 若要把 base 費用納入最終 quote PnL 歸因，必須明示換算價格。第 6 章使用實際出場價：
 
-```text
-F_buy,quote-at-exit = F_buy,base × p_sell [quote]
-```
+\\[
+F\_{\mathrm{buy,quote@exit}}
+=F\_{\mathrm{buy,base}}\times p\_{\mathrm{sell}}
+\quad[\mathrm{quote}]
+\\]
 
 同一筆 base 費不能又以進場價、又以出場價各扣一次。不同換算價回答不同估值問題，
 不是兩筆費用。
@@ -214,18 +243,26 @@ F_buy,quote-at-exit = F_buy,base × p_sell [quote]
 
 令 `G_mid` 為進出場參考中間價算出的理想毛損益、`G_fill` 為實際成交價毛損益：
 
-```text
-G_mid - K_spread - K_slippage = G_fill
-G_fill - K_fee = PnL_net
-PnL_net = C_final - C_initial             （全部平倉且無其他現金流）
-```
+\\[
+\begin{aligned}
+G\_{\mathrm{mid}}-K\_{\mathrm{spread}}-K\_{\mathrm{slippage}}
+  &=G\_{\mathrm{fill}} \\\\
+G\_{\mathrm{fill}}-K\_{\mathrm{fee}}
+  &=\mathrm{PnL}\_{\mathrm{net}} \\\\
+\mathrm{PnL}\_{\mathrm{net}}
+  &=C\_{\mathrm{final}}-C\_{\mathrm{initial}}
+  &&\text{（全部平倉且無其他現金流）}
+\end{aligned}
+\\]
 
 因此：
 
-```text
-K = K_spread + K_slippage + K_fee
-PnL_net = G_mid - K
-```
+\\[
+\begin{aligned}
+K&=K\_{\mathrm{spread}}+K\_{\mathrm{slippage}}+K\_{\mathrm{fee}} \\\\
+\mathrm{PnL}\_{\mathrm{net}}&=G\_{\mathrm{mid}}-K
+\end{aligned}
+\\]
 
 三條等式必須同時成立。歸因表只解釋已發生在哪一層的成本，不新增第二份現金流。
 
@@ -233,11 +270,15 @@ PnL_net = G_mid - K
 
 對第 6 章「買入費扣 base、賣出費扣 quote、全部賣出」的固定情境：
 
-```text
-q × (1-r_buy) × p_exit × (1-r_sell) = q × p_buy
-
-p_exit,BE = p_buy / ((1-r_buy) × (1-r_sell))
-```
+\\[
+\begin{aligned}
+q(1-r\_{\mathrm{buy}})p\_{\mathrm{exit}}(1-r\_{\mathrm{sell}})
+  &=q\,p\_{\mathrm{buy}} \\\\
+p\_{\mathrm{exit,BE}}
+  &=\frac{p\_{\mathrm{buy}}}
+          {(1-r\_{\mathrm{buy}})(1-r\_{\mathrm{sell}})}
+\end{aligned}
+\\]
 
 `p_exit,BE` 是實際出場成交價門檻。若研究問題要的是參考中間價門檻，還要加回
 明示的出場半邊 spread 與預期滑點；若數量會改變滑點，就不能把它們當常數。
@@ -246,9 +287,9 @@ p_exit,BE = p_buy / ((1-r_buy) × (1-r_sell))
 
 第 6 章明定：
 
-```text
-T = (N_entry + N_exit) / E_initial
-```
+\\[
+T=\frac{N\_{\mathrm{entry}}+N\_{\mathrm{exit}}}{E\_{\mathrm{initial}}}
+\\]
 
 分子同時計入買賣兩邊的實際成交名義價值，分母是本輪開始時的 quote 權益。其他
 報告若採單邊名義價值、平均權益或日均資產，必須改名或明示定義，不能直接比較。
@@ -258,11 +299,16 @@ T = (N_entry + N_exit) / E_initial
 本節只適用於第 7 章的單向持倉 U 本位線性永續。`Q_perp` 以 base asset 表示
 合約數量，價格、名義價值、損益與期貨錢包則以 quote asset 表示：
 
-```text
-N_perp = abs(Q_perp) × m_f                         [quote]
-U_perp = (m_f - p_entry,perp) × Q_perp            [quote]
-CF_funding = -Q_perp × m_f × r_f                  [quote]
-```
+\\[
+\begin{aligned}
+N\_{\mathrm{perp}}&=|Q\_{\mathrm{perp}}|m\_f &&[\mathrm{quote}] \\\\
+U\_{\mathrm{perp}}
+  &=(m\_f-p\_{\mathrm{entry,perp}})Q\_{\mathrm{perp}}
+  &&[\mathrm{quote}] \\\\
+\mathrm{CF}\_{\mathrm{funding}}
+  &=-Q\_{\mathrm{perp}}m\_fr\_f &&[\mathrm{quote}]
+\end{aligned}
+\\]
 
 名義價值一律非負；方向只保留在 `Q_perp`、價格損益與資金費現金流。以帳戶觀點
 判讀資金費時：
@@ -279,11 +325,17 @@ CF_funding = -Q_perp × m_f × r_f                  [quote]
 資金費是期貨錢包的一筆獨立現金流，不是現貨／期貨 transfer。令 `U_perp` 已用
 同一結算標記價格重估：
 
-```text
-W_after = W_before + CF_funding                    [quote]
-E_futures = W_after + U_perp
-          = W_before + CF_funding + U_perp         [quote]
-```
+\\[
+\begin{aligned}
+W\_{\mathrm{after}}
+  &=W\_{\mathrm{before}}+\mathrm{CF}\_{\mathrm{funding}}
+  &&[\mathrm{quote}] \\\\
+E\_{\mathrm{futures}}
+  &=W\_{\mathrm{after}}+U\_{\mathrm{perp}} \\\\
+  &=W\_{\mathrm{before}}+\mathrm{CF}\_{\mathrm{funding}}
+    +U\_{\mathrm{perp}} &&[\mathrm{quote}]
+\end{aligned}
+\\]
 
 `W_after` 已包含資金費，不能再加一次 `CF_funding`；`N_perp` 只是曝險規模，也
 不能加進權益。產品模式與雙錢包最小查表見
@@ -294,12 +346,16 @@ E_futures = W_after + U_perp
 本節只對齊第 8 章與 Emmet `v0.3.0` 的固定單向持倉模型。以帶方向數量
 `Q_perp`、開倉均價 `p_entry,perp` 與當前標記價格 `m_risk` 定義：
 
-```text
-N_perp = abs(Q_perp) × m_risk
-U_perp = (m_risk - p_entry,perp) × Q_perp
-IM_position = abs(Q_perp) × p_entry,perp / L
-MM = N_perp × MMR - A
-```
+\\[
+\begin{aligned}
+N\_{\mathrm{perp}}&=|Q\_{\mathrm{perp}}|m\_{\mathrm{risk}} \\\\
+U\_{\mathrm{perp}}
+  &=(m\_{\mathrm{risk}}-p\_{\mathrm{entry,perp}})Q\_{\mathrm{perp}} \\\\
+\mathrm{IM}\_{\mathrm{position}}
+  &=\frac{|Q\_{\mathrm{perp}}|p\_{\mathrm{entry,perp}}}{L} \\\\
+\mathrm{MM}&=N\_{\mathrm{perp}}\mathrm{MMR}-A
+\end{aligned}
+\\]
 
 `IM_position` 是 Emmet 的持倉 target；訂單 admission 還可能需要 reservation、
 open loss 與費用，不能把這一式冒充完整開倉成本。`Q_perp`、entry 與 mark 不變
@@ -307,57 +363,81 @@ open loss 與費用，不能把這一式冒充完整開倉成本。`Q_perp`、en
 
 Isolated 與 Cross 的保證金餘額為：
 
-```text
-MB_isolated = isolated_margin + U_this
-MB_cross = cross_wallet_balance + Σ U_cross
-MR = Σ MM / MB                         （只在 MB > 0 時定義）
-```
+\\[
+\begin{aligned}
+\mathrm{MB}\_{\mathrm{isolated}}
+  &=M\_{\mathrm{isolated}}+U\_{\mathrm{this}} \\\\
+\mathrm{MB}\_{\mathrm{cross}}
+  &=W\_{\mathrm{cross}}+\sum\_iU\_{\mathrm{cross},i} \\\\
+\mathrm{MR}&=\frac{\sum\_i\mathrm{MM}\_i}{\mathrm{MB}},
+  \qquad \mathrm{MB}>0
+\end{aligned}
+\\]
 
 `MB <= 0` 時 `MR` 未定義，必須 fail closed，不能讓負比率進入正常門檻比較。
 
 令 `TMM_other`、`U_other` 分別為其他 Cross 部位的維持保證金與未實現 PnL：
 
-```text
-p_liq =
-  (W - TMM_other + U_other + A - Q_perp × p_entry,perp)
-  / (abs(Q_perp) × MMR - Q_perp)
-```
+\\[
+p\_{\mathrm{liq}}
+=\frac{W-\mathrm{TMM}\_{\mathrm{other}}+U\_{\mathrm{other}}+A
+       -Q\_{\mathrm{perp}}p\_{\mathrm{entry,perp}}}
+      {|Q\_{\mathrm{perp}}|\mathrm{MMR}-Q\_{\mathrm{perp}}}
+\\]
 
 Cross 的 `W` 是 cross wallet balance；Isolated 則以該部位 isolated margin 代入，
 並令 `TMM_other=0`、`U_other=0`。有效答案還要滿足：
 
-```text
-Q_perp != 0
-p_liq > 0
-MB(p_liq) = total MM(p_liq)
-symbol、market、mark 時點與分層表身分相符
-```
+\\[
+\begin{aligned}
+Q\_{\mathrm{perp}}&\ne0 \\\\
+p\_{\mathrm{liq}}&>0 \\\\
+\mathrm{MB}(p\_{\mathrm{liq}})
+  &=\mathrm{MM}\_{\mathrm{total}}(p\_{\mathrm{liq}}) \\\\
+\text{symbol、market、mark 時點}
+  &\text{與分層表身分相符}
+\end{aligned}
+\\]
 
 ## 期現兩腿：基差、淨敞口與組合 PnL
 
 第 9 章採同一 base asset 的現貨多頭與 U 本位線性永續空頭。用相同 base 單位記錄：
 
-```text
-Q_net = Q_spot + Q_perp                            [base]
-B_t = P_t - S_t                                    [quote/base]
-PnL_spot,ref = (S_1 - S_0) × Q_spot               [quote]
-PnL_perp,ref = (P_1 - P_0) × Q_perp               [quote]
-PnL_price,ref = PnL_spot,ref + PnL_perp,ref        [quote]
-```
+\\[
+\begin{aligned}
+Q\_{\mathrm{net}}&=Q\_{\mathrm{spot}}+Q\_{\mathrm{perp}}
+  &&[\mathrm{base}] \\\\
+B\_t&=P\_t-S\_t &&[\mathrm{quote/base}] \\\\
+\mathrm{PnL}\_{\mathrm{spot,ref}}
+  &=(S\_1-S\_0)Q\_{\mathrm{spot}} &&[\mathrm{quote}] \\\\
+\mathrm{PnL}\_{\mathrm{perp,ref}}
+  &=(P\_1-P\_0)Q\_{\mathrm{perp}} &&[\mathrm{quote}] \\\\
+\mathrm{PnL}\_{\mathrm{price,ref}}
+  &=\mathrm{PnL}\_{\mathrm{spot,ref}}
+    +\mathrm{PnL}\_{\mathrm{perp,ref}} &&[\mathrm{quote}]
+\end{aligned}
+\\]
 
 在 `Q_spot=q`、`Q_perp=-q` 的完整數量對沖下：
 
-```text
-PnL_price,ref = (B_0 - B_1) × q                    [quote]
-```
+\\[
+\mathrm{PnL}\_{\mathrm{price,ref}}
+=(B\_0-B\_1)\times q
+\quad[\mathrm{quote}]
+\\]
 
 這只把共同方向價格項消掉；若 `Q_net != 0`，仍留下方向曝險。即使 `Q_net=0`，
 基差、兩腿成交、funding、費用、流動性、兩錢包、保證金與強平風險仍存在。
 
-```text
-PnL_fill = PnL_price,ref - K_price
-PnL_net = PnL_fill + Σ CF_funding - Σ fees
-```
+\\[
+\begin{aligned}
+\mathrm{PnL}\_{\mathrm{fill}}
+  &=\mathrm{PnL}\_{\mathrm{price,ref}}-K\_{\mathrm{price}} \\\\
+\mathrm{PnL}\_{\mathrm{net}}
+  &=\mathrm{PnL}\_{\mathrm{fill}}
+    +\sum\_i\mathrm{CF}\_{\mathrm{funding},i}-\sum\_jF\_j
+\end{aligned}
+\\]
 
 若 `PnL_fill` 已直接由實際成交價計算，`K_price` 只用於歸因，不能再扣一次。
 
@@ -365,22 +445,31 @@ PnL_net = PnL_fill + Σ CF_funding - Σ fees
 
 增加同方向數量 `q` 時：
 
-```text
-Q_after = Q_before + q
-p_avg,after =
-  (abs(Q_before) × p_avg,before + abs(q) × p_fill)
-  / abs(Q_after)
-```
+\\[
+\begin{aligned}
+Q\_{\mathrm{after}}&=Q\_{\mathrm{before}}+q \\\\
+p\_{\mathrm{avg,after}}
+  &=\frac{|Q\_{\mathrm{before}}|p\_{\mathrm{avg,before}}
+          +|q|p\_{\mathrm{fill}}}
+         {|Q\_{\mathrm{after}}|}
+\end{aligned}
+\\]
 
 以既有方向平倉 `q_close`：
 
-```text
-ΔR_grid = (p_close - p_avg,before) × q_close × sign(Q_before)
-W_after = W_before + ΔR_grid - fee
-U_grid = (m - p_avg) × Q_grid
-E_grid = W_grid + U_grid
-E_grid - E_initial = R_grid - Σ fees + Σ funding + U_grid
-```
+\\[
+\begin{aligned}
+\Delta R\_{\mathrm{grid}}
+  &=(p\_{\mathrm{close}}-p\_{\mathrm{avg,before}})
+    q\_{\mathrm{close}}\operatorname{sign}(Q\_{\mathrm{before}}) \\\\
+W\_{\mathrm{after}}&=W\_{\mathrm{before}}+\Delta R\_{\mathrm{grid}}-F \\\\
+U\_{\mathrm{grid}}&=(m-p\_{\mathrm{avg}})Q\_{\mathrm{grid}} \\\\
+E\_{\mathrm{grid}}&=W\_{\mathrm{grid}}+U\_{\mathrm{grid}} \\\\
+E\_{\mathrm{grid}}-E\_{\mathrm{initial}}
+  &=R\_{\mathrm{grid}}-\sum\_jF\_j+\sum\_i\mathrm{CF}\_{\mathrm{funding},i}
+    +U\_{\mathrm{grid}}
+\end{aligned}
+\\]
 
 最後一式要求 realized、fee 與 funding 只入帳一次。未成交掛單不先改 inventory、
 平均成本或 wallet，但要另算全數成交後的 worst-open-order exposure。

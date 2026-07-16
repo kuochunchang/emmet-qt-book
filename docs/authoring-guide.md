@@ -45,6 +45,34 @@
 HTML。書稿中的圖片、script 與其他 reader resource 必須納入 repository 並可由
 book check 在離線產物中解析；外部網址只作為讀者連結。
 
+## 數學公式
+
+書面數學關係使用 LaTeX，由固定在 repository 內的 MathJax 轉成 HTML SVG。系統
+欄位名稱、命令、程式碼與逐字預期輸出仍使用 inline code 或 fenced code block；
+不要把可複製的 evidence output 改成數學排版。
+
+mdBook 來源必須使用經 Markdown escape 的 delimiter：
+
+```markdown
+行內公式：\\( Q\_{\mathrm{net}}=Q\_{\mathrm{spot}}+Q\_{\mathrm{perp}} \\)。
+
+\\[
+\mathrm{PnL}\_{\mathrm{net}}
+=\mathrm{PnL}\_{\mathrm{fill}}+\mathrm{CF}\_{\mathrm{funding}}-\sum\_i F\_i
+\\]
+```
+
+- 行內公式使用 `\\(` 與 `\\)`，且同一行成對。
+- 展示公式使用各自獨立一行的 `\\[` 與 `\\]`。
+- 不使用 `$$`；mdBook 的 Markdown 路徑不把它當成受支援的正式 delimiter。
+- 多行對齊使用 `aligned`；來源中的 LaTeX 換行要寫成四個反斜線，讓 HTML 保留
+  兩個反斜線給 MathJax。
+- 變數下標使用 `{}`，且 source 的 `_` 必須寫成 `\_`，避免 CommonMark 在
+  MathJax 前把它解析成 emphasis；單位用 `\mathrm{}`，分式用 `\frac{}{}`。
+  不要再以 `p_entry`、`USDT/BTC` 或 `/` 的純文字近似正式公式。
+- 同一公式首次出現時仍須以正文說明符號、單位、方向與適用前提；排版變漂亮不
+  會使公式自動正確。
+
 ## 共用版本固定機制
 
 所有操作章共用[實作準備](../manuscript/front-matter/setup.md)建立的版本化 worktree：

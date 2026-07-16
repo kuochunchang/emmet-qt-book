@@ -22,6 +22,13 @@ from urllib.parse import unquote, urlsplit
 
 
 MDBOOK_VERSION = "0.5.4"
+MATHJAX_VERSION = "4.0.0"
+MATHJAX_CONFIG_PATH = "theme/mathjax-config.js"
+MATHJAX_BUNDLE_PATH = "theme/mathjax/tex-svg.js"
+MATHJAX_BUNDLE_SHA256 = (
+    "8fcdaf8760790105412b6b5a087cf189f84abc8ed81731190363352dfcbbb44b"
+)
+MATHJAX_ADDITIONAL_JS = [MATHJAX_CONFIG_PATH, MATHJAX_BUNDLE_PATH]
 SUMMARY_LINK_RE = re.compile(r"\[([^\]]+)]\(([^)]*)\)")
 SUMMARY_ITEM_RE = re.compile(r"^\s*(?:[-*]\s+)?\[[^]]+]\([^)]*\)\s*$")
 METADATA_RE = re.compile(r"^>\s*(配套基線|內容狀態|最後驗證日期)：\s*(.*?)\s*$")
@@ -407,6 +414,7 @@ def _validate_book_config(root: Path, findings: list[Finding]) -> tuple[Path, Pa
     if not isinstance(build, dict):
         findings.append(Finding("CONFIG_BUILD_SECTION", "book.toml", 0, "缺少 [build]"))
         build = {}
+    html_output: dict = {}
     if not isinstance(output, dict) or "html" not in output:
         findings.append(
             Finding("CONFIG_HTML_OUTPUT", "book.toml", 0, "必須明確啟用 [output.html]")
@@ -419,6 +427,58 @@ def _validate_book_config(root: Path, findings: list[Finding]) -> tuple[Path, Pa
                 0,
                 "目前正式輸出只能啟用 HTML；其他格式需另行驗收",
             )
+        )
+    elif isinstance(output.get("html"), dict):
+        html_output = output["html"]
+    else:
+        findings.append(
+            Finding("CONFIG_HTML_OUTPUT", "book.toml", 0, "[output.html] 必須是 table")
+        )
+
+    if html_output.get("mathjax-support") is True:
+        findings.append(
+            Finding(
+                "CONFIG_MATHJAX_CDN",
+                "book.toml",
+                0,
+                "不得啟用 mdBook 內建 CDN MathJax；必須使用 repository 內固定資源",
+            )
+        )
+    if html_output.get("additional-js") != MATHJAX_ADDITIONAL_JS:
+        findings.append(
+            Finding(
+                "CONFIG_MATHJAX_JS",
+                "book.toml",
+                0,
+                f"output.html.additional-js 必須依序為 {MATHJAX_ADDITIONAL_JS!r}",
+            )
+        )
+
+    bundle = root / MATHJAX_BUNDLE_PATH
+    if not bundle.is_file():
+        findings.append(
+            Finding("MATHJAX_BUNDLE_MISSING", MATHJAX_BUNDLE_PATH, 0, "缺少離線 MathJax")
+        )
+    else:
+        try:
+            digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+        except OSError as error:
+            findings.append(
+                Finding("MATHJAX_BUNDLE_READ", MATHJAX_BUNDLE_PATH, 0, str(error))
+            )
+        else:
+            if digest != MATHJAX_BUNDLE_SHA256:
+                findings.append(
+                    Finding(
+                        "MATHJAX_BUNDLE_CHECKSUM",
+                        MATHJAX_BUNDLE_PATH,
+                        0,
+                        f"MathJax {MATHJAX_VERSION} SHA-256 不符：{digest}",
+                    )
+                )
+    if not (root / MATHJAX_CONFIG_PATH).is_file():
+        findings.append(
+            Finding("MATHJAX_CONFIG_MISSING", MATHJAX_CONFIG_PATH, 0, "缺少 MathJax 設定")
         )
 
     for key in ("title", "description"):
@@ -455,6 +515,88 @@ def _validate_book_config(root: Path, findings: list[Finding]) -> tuple[Path, Pa
         )
 
     return root / "manuscript", root / "book"
+
+
+def _validate_math_markdown(
+    text: str, display: str, findings: list[Finding]
+) -> None:
+    """Require mdBook-safe TeX delimiters outside fenced code and HTML comments."""
+    display_open_line: int | None = None
+    for line_number, line in visible_markdown_lines(text):
+        stripped = line.strip()
+        was_in_display = display_open_line is not None
+        if "$$" in line:
+            findings.append(
+                Finding(
+                    "MATH_DELIMITER_UNSUPPORTED",
+                    display,
+                    line_number,
+                    "不得使用 $$；展示公式使用獨立行的 \\\\[ 與 \\\\]",
+                )
+            )
+        if stripped == "\\\\[":
+            if display_open_line is not None:
+                findings.append(
+                    Finding(
+                        "MATH_DISPLAY_NESTED",
+                        display,
+                        line_number,
+                        f"展示公式與第 {display_open_line} 行的開頭重疊",
+                    )
+                )
+            else:
+                display_open_line = line_number
+        elif stripped == "\\\\]":
+            if display_open_line is None:
+                findings.append(
+                    Finding("MATH_DISPLAY_CLOSE", display, line_number, "缺少對應的 \\\\[")
+                )
+            else:
+                display_open_line = None
+        elif "\\\\[" in line or "\\\\]" in line:
+            findings.append(
+                Finding(
+                    "MATH_DISPLAY_LINE",
+                    display,
+                    line_number,
+                    "\\\\[ 與 \\\\] 必須各自位於獨立行",
+                )
+            )
+
+        inline_open = line.count("\\\\(")
+        inline_close = line.count("\\\\)")
+        if inline_open != inline_close:
+            findings.append(
+                Finding(
+                    "MATH_INLINE_BALANCE",
+                    display,
+                    line_number,
+                    f"行內公式 delimiter 不平衡：\\\\(={inline_open}、\\\\)={inline_close}",
+                )
+            )
+        math_fragments = re.findall(r"\\\\\((.*?)\\\\\)", line)
+        if was_in_display or (
+            display_open_line is not None and stripped != "\\\\["
+        ):
+            math_fragments.append(line)
+        if any(re.search(r"(?<!\\)_", fragment) for fragment in math_fragments):
+            findings.append(
+                Finding(
+                    "MATH_SUBSCRIPT_ESCAPE",
+                    display,
+                    line_number,
+                    "公式下標的 _ 必須在 Markdown source 寫成 \\_",
+                )
+            )
+    if display_open_line is not None:
+        findings.append(
+            Finding(
+                "MATH_DISPLAY_UNCLOSED",
+                display,
+                display_open_line,
+                "展示公式缺少結尾 \\\\]",
+            )
+        )
 
 
 def _metadata_patterns(
@@ -2374,6 +2516,7 @@ def validate_source(
                 texts[path] = text
         if text is not None:
             _validate_manuscript_raw_html(text, display, findings)
+            _validate_math_markdown(text, display, findings)
 
     states = _content_states(source_root / "preface.md", findings, root)
     managed_rel = {path: path.relative_to(source_root).as_posix() for path in managed}
@@ -2933,6 +3076,207 @@ def validate_html_output(root: Path, output_root: Path | None = None) -> list[Fi
     return sorted(findings, key=Finding.sort_key)
 
 
+def validate_math_browser_render(output_root: Path) -> list[Finding]:
+    """Render a minimal TeX expression with the exact vendored output assets."""
+    output_root = output_root.resolve()
+    bundle_candidates = sorted(
+        (output_root / "theme" / "mathjax").glob("tex-svg-*.js")
+    )
+    config_candidates = sorted(
+        (output_root / "theme").glob("mathjax-config-*.js")
+    )
+    findings: list[Finding] = []
+    if len(bundle_candidates) != 1:
+        findings.append(
+            Finding(
+                "MATHJAX_OUTPUT_BUNDLE",
+                "book/",
+                0,
+                f"預期一個 hashed MathJax bundle，實際為 {len(bundle_candidates)}",
+            )
+        )
+    if len(config_candidates) != 1:
+        findings.append(
+            Finding(
+                "MATHJAX_OUTPUT_CONFIG",
+                "book/",
+                0,
+                f"預期一個 hashed MathJax config，實際為 {len(config_candidates)}",
+            )
+        )
+    if findings:
+        return findings
+
+    digest = hashlib.sha256(bundle_candidates[0].read_bytes()).hexdigest()
+    if digest != MATHJAX_BUNDLE_SHA256:
+        return [
+            Finding(
+                "MATHJAX_OUTPUT_CHECKSUM",
+                bundle_candidates[0].relative_to(output_root).as_posix(),
+                0,
+                f"發布 bundle SHA-256 不符：{digest}",
+            )
+        ]
+
+    configured = os.environ.get("CHROME_BIN")
+    chrome = configured or next(
+        (
+            candidate
+            for name in ("google-chrome", "chromium", "chromium-browser")
+            if (candidate := shutil.which(name)) is not None
+        ),
+        None,
+    )
+    if not chrome:
+        return [
+            Finding(
+                "MATH_BROWSER_MISSING",
+                "book/",
+                0,
+                "需要 headless Chrome/Chromium；也可用 CHROME_BIN 指定 executable",
+            )
+        ]
+
+    with tempfile.TemporaryDirectory(
+        prefix="mathjax-browser-", dir=output_root.parent
+    ) as temporary:
+        smoke = Path(temporary) / "index.html"
+        profile = Path(temporary) / "profile"
+        smoke.write_text(
+            "<!doctype html><html lang=\"zh-TW\"><head><meta charset=\"utf-8\">"
+            f"<script src=\"{html.escape(config_candidates[0].as_uri(), quote=True)}\"></script>"
+            f"<script src=\"{html.escape(bundle_candidates[0].as_uri(), quote=True)}\"></script>"
+            "</head><body><p>\\[x=\\frac{1}{2}\\]</p></body></html>",
+            encoding="utf-8",
+        )
+        try:
+            result = subprocess.run(
+                [
+                    chrome,
+                    "--headless=new",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--disable-background-networking",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--allow-file-access-from-files",
+                    f"--user-data-dir={profile}",
+                    "--host-resolver-rules=MAP * 0.0.0.0",
+                    "--virtual-time-budget=5000",
+                    "--dump-dom",
+                    smoke.as_uri(),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=45,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return [Finding("MATH_BROWSER_FAILED", "book/", 0, str(error))]
+    if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()
+        message = detail[-1] if detail else f"browser exit {result.returncode}"
+        return [Finding("MATH_BROWSER_FAILED", "book/", 0, message)]
+    if (
+        "<mjx-container" not in result.stdout
+        or 'jax="SVG"' not in result.stdout
+        or "<svg" not in result.stdout
+    ):
+        return [
+            Finding(
+                "MATH_NOT_RENDERED",
+                "book/",
+                0,
+                "headless browser 未產生 MathJax SVG container",
+            )
+        ]
+
+    formula_pages: list[tuple[Path, int]] = []
+    for page in sorted(output_root.rglob("*.html"), key=lambda item: item.as_posix()):
+        if page.name in {"print.html", "toc.html"}:
+            continue
+        try:
+            source = page.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            findings.append(
+                Finding(
+                    "MATH_PAGE_READ",
+                    page.relative_to(output_root).as_posix(),
+                    0,
+                    str(error),
+                )
+            )
+            continue
+        expression_count = source.count("\\[") + source.count("\\(")
+        if expression_count:
+            formula_pages.append((page, expression_count))
+
+    with tempfile.TemporaryDirectory(
+        prefix="mathjax-pages-", dir=output_root.parent
+    ) as temporary:
+        for index, (page, expected_count) in enumerate(formula_pages):
+            profile = Path(temporary) / f"profile-{index}"
+            try:
+                rendered = subprocess.run(
+                    [
+                        chrome,
+                        "--headless=new",
+                        "--no-sandbox",
+                        "--disable-gpu",
+                        "--disable-dev-shm-usage",
+                        "--disable-background-networking",
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                        "--allow-file-access-from-files",
+                        f"--user-data-dir={profile}",
+                        "--host-resolver-rules=MAP * 0.0.0.0",
+                        "--virtual-time-budget=5000",
+                        "--dump-dom",
+                        page.as_uri(),
+                    ],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=45,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                findings.append(
+                    Finding(
+                        "MATH_PAGE_BROWSER",
+                        page.relative_to(output_root).as_posix(),
+                        0,
+                        str(error),
+                    )
+                )
+                continue
+            display = page.relative_to(output_root).as_posix()
+            if rendered.returncode != 0:
+                detail = rendered.stderr.strip().splitlines()
+                message = detail[-1] if detail else f"browser exit {rendered.returncode}"
+                findings.append(Finding("MATH_PAGE_BROWSER", display, 0, message))
+                continue
+            if "data-mjx-error" in rendered.stdout or "<mjx-merror" in rendered.stdout:
+                findings.append(
+                    Finding("MATH_TEX_ERROR", display, 0, "MathJax 回報 TeX 語法錯誤")
+                )
+            actual_count = rendered.stdout.count("<mjx-container")
+            if actual_count != expected_count:
+                findings.append(
+                    Finding(
+                        "MATH_EXPRESSION_COUNT",
+                        display,
+                        0,
+                        f"來源 {expected_count} 式，瀏覽器渲染 {actual_count} 式",
+                    )
+                )
+    if findings:
+        return sorted(findings, key=Finding.sort_key)
+    return []
+
+
 def output_manifest(output_root: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     count = 0
@@ -3066,6 +3410,12 @@ def run(root: Path, mdbook: Path) -> int:
         shutil.rmtree(staging, ignore_errors=True)
         _print_findings(output_findings)
         return 1
+    math_findings = validate_math_browser_render(staging)
+    if math_findings:
+        shutil.rmtree(staging, ignore_errors=True)
+        _print_findings(math_findings)
+        return 1
+    print("MathJax browser render: PASS")
     (staging / OUTPUT_MARKER).write_text(OUTPUT_MARKER_CONTENT, encoding="utf-8")
     try:
         if output_root.exists():

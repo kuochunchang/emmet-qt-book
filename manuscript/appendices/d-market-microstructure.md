@@ -39,10 +39,14 @@ maker／taker 是成交證據，不只是下單意圖。Post-only／`LIMIT_MAKER
 
 在第 6 章的簡化情境中：
 
-```text
-買入價格摩擦 = (ask-mid) + (buy fill-ask)
-賣出價格摩擦 = (mid-bid) + (bid-sell fill)
-```
+\\[
+\begin{aligned}
+K\_{\mathrm{price,buy}}
+  &=(a-m)+(p\_{\mathrm{buy}}-a) \\\\
+K\_{\mathrm{price,sell}}
+  &=(m-b)+(b-p\_{\mathrm{sell}})
+\end{aligned}
+\\]
 
 乘上成交數量後才得到 quote 金額。第一段是半邊 spread，第二段是相對最佳報價的
 不利滑點。
@@ -77,9 +81,10 @@ maker／taker 是成交證據，不只是下單意圖。Post-only／`LIMIT_MAKER
 
 第 6 章的
 
-```text
-scenario_depth × participation_cap
-```
+\\[
+q\_{\mathrm{capacity}}
+=D\_{\mathrm{scenario}}\times c\_{\mathrm{participation}}
+\\]
 
 只是壓力情境，不是市場衝擊模型。它有一個重要用途：當規劃數量超過明示上限時
 先 no-go，避免把缺少的成交證據補成樂觀假設。要把它升級成真實容量結論，至少
