@@ -30,7 +30,7 @@
 # 第四篇　從一張訂單追到每一分錢
 
 - [精確數值、交易所規則與合法訂單](chapters/16-precise-values-valid-orders.md)
-- [訂單意圖、生命週期與交易所回報]()
+- [訂單意圖、生命週期與交易所回報](chapters/17-order-intent-lifecycle-reports.md)
 - [回測撮合不是交易所]()
 - [資金預留、部分成交與唯一帳本]()
 - [資金費、強平與微型交易核帳]()

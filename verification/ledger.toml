@@ -7,6 +7,130 @@ schema_version = 2
 W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
 
 [[records]]
+id = "ch17-v030-order-lifecycle-canonical-guards"
+batch = "W1"
+document = "manuscript/chapters/17-order-intent-lifecycle-reports.md"
+chapter = "訂單意圖、生命週期與交易所回報"
+claim = "v0.3.0 的 Order／OrderUpdate、十條合法狀態轉移與 AccountingLedger canonical guard 可區分意圖、接受、部分成交、終態與初始拒絕；相同 partial 狀態只有在累計成交前進時才是新事實，完全重複、倒退、身分不符及終態後事件均 fail closed。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：本項使用程式內固定 Decimal 訂單與回報，以及已發布模型／唯一帳本聚焦測試，不載入市場資料集。"
+formal_entrypoints = [
+  "quant.common.models.Order",
+  "quant.common.models.OrderUpdate",
+  "quant.common.models.ALLOWED_TRANSITIONS",
+  "quant.common.models.validate_transition",
+  "quant.common.engine.AccountingLedger.apply_order_event",
+]
+schemas = [
+  "quant.common.models.enums.OrderType／TimeInForce／OrderStatus",
+  "quant.common.models.orders.Order／OrderUpdate",
+  "quant.common.models.events.OrderEvent",
+]
+interface_note = "已發布 Python 模型、狀態機與 canonical ledger 只支持本地固定生命週期證據；它們不是正式讀者下單 CLI、交易所 connector、user stream、replay 或對帳入口。"
+evidence_refs = [
+  "book:manuscript/chapters/17-order-intent-lifecycle-reports.md",
+  "book:manuscript/appendices/d-market-microstructure.md",
+  "book:manuscript/assets/ch17-order-lifecycle-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/enums.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/orders.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/events.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/accounting.py",
+  "repo:emmet-qt-bt1:tests/unit/test_models_orders.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_accounting.py",
+  "repo:emmet-qt-bt1:docs/quantitative-trading-system-design.md",
+  "repo:emmet-qt-bt1:docs/design/step-3b-fill-execution.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run pytest tests/unit/test_models_orders.py tests/unit/test_engine_accounting.py::TestCanonicalOrderState -q",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch17-order-lifecycle-oracle.py\"",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Python 3.12.3",
+  "44 passed",
+  "intents=LIMIT/GTC,LIMIT/GTX-post-only,MARKET/reduce-only,decimal-source=string",
+  "intent-model-status=NEW,exchange-ack=false",
+  "spot-post-only-model=FAIL-CLOSED",
+  "legal-transition-count=10,terminal-exits=0",
+  "trace=NEW>PARTIALLY_FILLED>PARTIALLY_FILLED>CANCELED,cumulative=0>0.400>0.700>0.700",
+  "same-status-partial=LEGAL-ONLY-WITH-CUMULATIVE-PROGRESS",
+  "direct-fill=NEW>FILLED,PASS",
+  "duplicate-new=FAIL-CLOSED,InvalidOrderTransition",
+  "terminal-late-fill=FAIL-CLOSED,InvalidOrderTransition",
+  "initial-rejected=canonical-first-event-not-a-transition",
+  "chapter-17-order-lifecycle-oracle=PASS",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；Python 3.12.3；訂單模型與 canonical order state 聚焦測試 44 passed；helper 核對 MARKET／LIMIT、GTC／GTX、reduce-only 的模型邊界，十條合法轉移、零條終態出口、兩次 partial 後取消的累計量，以及重複 NEW／終態後 fill 的 fail-closed 結果。"
+known_differences = [
+  "Order.status 的模型初始值 NEW 不構成交易所 accepted；只有帶 order ID 的事件與其 canonical 套用能支持本地接受事實。",
+  "本地 PARTIALLY_FILLED→REJECTED 可表示財務授權拒絕剩餘量，不宣稱與 Binance Spot 同名狀態的所有 reason 完全相同。",
+  "OrderUpdate.replayed 只是提前凍結的 Phase 7 schema；v0.3.0 未發布 live user stream、重播去重、斷線回補或 REST 對帳入口。",
+]
+verified_on = "2026-07-17"
+revalidation_triggers = [
+  "Order／OrderUpdate、OrderStatus、ALLOWED_TRANSITIONS、validate_transition 或 AccountingLedger canonical guard 語義改變",
+  "helper trace、Decimal 輸入、測試數量、PASS markers 或 fail-closed 決定改變",
+  "配套基線 tag／commit 或 Chapter 17 內容狀態改變",
+]
+
+[[records]]
+id = "ch17-binance-spot-status-report-source"
+batch = "W1"
+document = "manuscript/chapters/17-order-intent-lifecycle-reports.md"
+chapter = "訂單意圖、生命週期與交易所回報"
+claim = "Binance 官方 Spot API 固定文件分列 NEW、PARTIALLY_FILLED、FILLED、CANCELED、REJECTED、EXPIRED 的 order status 語義，並由 executionReport 分開 current execution type 與 current order status，支持本章的意圖／接受／成交／終態欄位邊界。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：本項只查證官方固定版本文件的公開欄位與狀態語義，不呼叫私人訂單、帳戶或 user stream。"
+formal_entrypoints = []
+schemas = [
+  "Binance Spot order status: NEW／PARTIALLY_FILLED／FILLED／CANCELED／REJECTED／EXPIRED",
+  "Binance Spot executionReport: execution type x／order status X",
+]
+interface_note = "第一手固定文件只支持 Spot 公開欄位與狀態語義；本章的固定 trace、合法轉移與 fail-closed 行為仍由已發布配套 tag 支撐，不冒充本輪真實交易所回報。"
+evidence_refs = [
+  "url:https://github.com/binance/binance-spot-api-docs/blob/4987e707f84f20d736ee6a2bcb71396111cffee1/enums.md",
+  "url:https://github.com/binance/binance-spot-api-docs/blob/4987e707f84f20d736ee6a2bcb71396111cffee1/user-data-stream.md",
+]
+verification_commands = [
+  "開啟 Binance Spot API 固定 commit 的 enums.md；核對 NEW／PARTIALLY_FILLED／FILLED／CANCELED／REJECTED／EXPIRED",
+  "開啟同 commit 的 user-data-stream.md；核對 executionReport 及 x current execution type／X current order status",
+]
+executable = false
+executable_note = "不適用：第一手外部文件需連網且可能更新，發布前須重新查證；本書不為文件驗證開啟私人 user stream。"
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Order status (status)",
+  "NEW",
+  "PARTIALLY_FILLED",
+  "FILLED",
+  "CANCELED",
+  "REJECTED",
+  "EXPIRED",
+  "executionReport",
+  "Current execution type",
+  "Current order status",
+]
+result = "pass"
+observed = "2026-07-17 重新查證官方固定 commit：enums.md 分列六個本章使用的 order status，user-data-stream.md 說明訂單更新使用 executionReport，並分開 current execution type 與 current order status。未採用私人回報、即時訂單或文件範例數字作章內事實。"
+known_differences = [
+  "官方文件、API 與交易所規則可能改變；固定 commit 只支持欄位與狀態語義，發布前仍須重新查證。",
+  "本筆是 Binance Spot 文件證據，不支持 USDⓈ-M 所有 reason、配套本地狀態 reason、即時成交、帳戶狀態或交易決定。",
+]
+verified_on = "2026-07-17"
+revalidation_triggers = [
+  "Binance Spot order status 或 executionReport 文件語義改變",
+  "固定來源 commit 或第 17 章對官方欄位／狀態邊界的敘述改變",
+  "發布前市場事實重新查證",
+]
+
+[[records]]
 id = "ch16-v030-valid-order-rules"
 batch = "W1"
 document = "manuscript/chapters/16-precise-values-valid-orders.md"
