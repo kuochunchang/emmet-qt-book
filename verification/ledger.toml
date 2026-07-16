@@ -175,6 +175,67 @@ revalidation_triggers = [
 ]
 
 [[records]]
+id = "ch12-v030-closed-bar-multifeed-alignment"
+batch = "W1"
+document = "manuscript/chapters/12-time-bar-close-alignment.md"
+chapter = "時間、K 線收盤與多資料流對齊"
+claim = "v0.3.0 的歷史 datasource 以 open_time 加 interval 導出收盤事件，並以 canonical merge key 對齊成交 K 線與標記價格 K 線；固定 arrival envelope 會拒絕 next_open_time < available_time，late／backfill 不得補觸發或改寫舊決定。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：本項用章內固定 PyArrow table 驗證事件與可見邊界，不保存或宣稱市場資料集。"
+formal_entrypoints = [
+  "quant.common.datasource.KlineFeed",
+  "quant.common.datasource.MarkPriceFeed",
+  "quant.common.datasource.merge_events",
+]
+schemas = [
+  "quant.common.models.Bar",
+  "quant.common.models.MarkPriceBar",
+  "quant.common.models.MarketEvent",
+  "quant.common.models.MarkPriceEvent",
+  "quant.common.models.ExecutionOpenEvent",
+]
+interface_note = "已發布 Python datasource 把歷史儲存列轉為外部證據事件並確定性合併；固定 arrival／available envelope 是章內研究 oracle，不冒充 v0.3.0 event schema 或即時入口。"
+evidence_refs = [
+  "book:manuscript/chapters/12-time-bar-close-alignment.md",
+  "repo:emmet-qt-bt1:src/quant/common/models/bars.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/events.py",
+  "repo:emmet-qt-bt1:src/quant/common/datasource/feeds.py",
+  "repo:emmet-qt-bt1:src/quant/common/datasource/merge.py",
+  "repo:emmet-qt-bt1:tests/unit/test_datasource_feeds.py",
+  "repo:emmet-qt-bt1:tests/unit/test_datasource_merge.py",
+  "repo:emmet-qt-bt1:docs/design/step-3b-fill-execution.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv run pytest tests/unit/test_datasource_feeds.py tests/unit/test_datasource_merge.py -q",
+  "uv run python -c 'from datetime import UTC,datetime; import pyarrow as pa; from quant.common.datasource import KlineFeed,MarkPriceFeed,merge_events; from quant.common.models import Market; ms=lambda h,s=0:int(datetime(2024,1,1,h,0,s,tzinfo=UTC).timestamp()*1000); k=pa.table({\"open_time\":[ms(10),ms(11)],\"open\":[100.0,105.0],\"high\":[106.0,108.0],\"low\":[99.0,104.0],\"close\":[105.0,107.0],\"volume\":[10.0,11.0],\"quote_volume\":[1000.0,1100.0]}); m=pa.table({\"open_time\":[ms(10)],\"open\":[100.0],\"high\":[105.0],\"low\":[98.0],\"close\":[104.0]}); names=[type(e).__name__ for e in merge_events([KlineFeed([k],market=Market.FUTURES,symbol=\"BTCUSDT\",interval=\"1h\"),MarkPriceFeed([m],symbol=\"BTCUSDT\",interval=\"1h\")]) if e.timestamp==ms(11)]; assert names==[\"MarkPriceEvent\",\"MarketEvent\",\"ExecutionOpenEvent\"]; assert ms(11)<ms(11,3)<=ms(11,4); assert ms(12)<ms(12,5); print(\"aligned-order=\"+\",\".join(names)); print(\"closed-bar-visible=PASS\"); print(\"next-open=FAIL-CLOSED\"); print(\"late-backfill=NO-RETROACTIVE-DECISION\")'",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "28 passed",
+  "aligned-order=MarkPriceEvent,MarketEvent,ExecutionOpenEvent",
+  "closed-bar-visible=PASS",
+  "next-open=FAIL-CLOSED",
+  "late-backfill=NO-RETROACTIVE-DECISION",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；feed／merge 測試 28 passed；兩條固定資料流在 11:00 依 mark close、market close、execution open 排序；next-open 早於固定 available time 而 fail closed，late arrival 不回寫既有決定。"
+known_differences = [
+  "章內 PyArrow table 與 arrival／available 時點是固定教學 oracle，不是外部市場資料、網路延遲量測或 dataset manifest。",
+  "v0.3.0 歷史 feed event 不保存 arrival_time／available_time；模型雖有 late／is_backfill 欄位，本章不宣稱已發布 arrival-aware 即時回補、凍結或恢復入口。",
+  "固定離線 pytest 與 Python oracle 不支持外部資料可用性或即時延遲宣稱。",
+]
+verified_on = "2026-07-16"
+revalidation_triggers = [
+  "Bar／MarkPriceBar 的 open_time、interval、close_time 或 closed-bar 可見語義改變",
+  "KlineFeed／MarkPriceFeed 事件形狀、event priority 或 canonical merge key 改變",
+  "章內固定 arrival／available oracle、late／backfill 決定或 PASS markers 改變",
+  "配套基線 tag／commit 或 Chapter 12 內容狀態改變",
+]
+
+[[records]]
 id = "setup-v030-tag-worktree"
 batch = "W1"
 document = "manuscript/front-matter/setup.md"
