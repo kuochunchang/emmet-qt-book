@@ -38,6 +38,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
         )
         self.assertEqual(Path("/repo"), rotate.repository_root)
         self.assertEqual(42, rotate.wait_pid)
+        self.assertTrue(
+            parser.parse_args(["restart", "--trusted-control"]).trusted_control
+        )
         with (
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit),
@@ -74,6 +77,227 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "reviewer": Path("/workspace/emmet-qt-book-reviewer"),
             },
             launcher.runner_workdirs(root),
+        )
+
+    def test_control_worktree_is_a_separate_canonical_sibling(self) -> None:
+        self.assertEqual(
+            Path("/workspace/emmet-qt-book-loop-control"),
+            launcher.control_worktree_path(
+                Path("/workspace/emmet-qt-book")
+            ),
+        )
+
+    def test_repository_layout_uses_git_common_dir_not_invoking_branch(self) -> None:
+        feature = Path("/workspace/tasks/feature")
+        canonical = Path("/workspace/emmet-qt-book")
+        common_dir = canonical / ".git"
+
+        def git_layout(workdir: Path) -> tuple[Path, Path]:
+            if workdir == feature:
+                return feature, common_dir
+            self.assertEqual(canonical, workdir)
+            return canonical, common_dir
+
+        with mock.patch.object(
+            launcher.adapter,
+            "_git_root_and_common_dir",
+            side_effect=git_layout,
+        ):
+            self.assertEqual(
+                (canonical, common_dir),
+                launcher.resolve_repository_layout(
+                    loaded_worktree=feature
+                ),
+            )
+
+    def test_prepare_control_worktree_creates_and_detaches_latest_main(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "emmet-qt-book"
+            root.mkdir()
+            common_dir = root / ".git"
+            common_dir.mkdir()
+            control = launcher.control_worktree_path(root)
+            expected = "a" * 40
+
+            def git_layout(workdir: Path) -> tuple[Path, Path]:
+                return (root, common_dir) if workdir == root else (control, common_dir)
+
+            def git_output(workdir: Path, *arguments: str) -> str:
+                if arguments == ("rev-parse", launcher.adapter.TRUSTED_REF):
+                    return expected
+                if arguments == ("remote", "get-url", "origin"):
+                    return "git@example.invalid:repo.git"
+                if arguments == (
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                ):
+                    return ""
+                if workdir == control and arguments == ("rev-parse", "HEAD"):
+                    return expected
+                if workdir == control and arguments == (
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
+                ):
+                    return "HEAD"
+                self.fail(f"unexpected git query: {workdir} {arguments}")
+
+            with (
+                mock.patch.object(
+                    launcher.adapter,
+                    "_git_root_and_common_dir",
+                    side_effect=git_layout,
+                ),
+                mock.patch.object(launcher.adapter, "refresh_trusted_main"),
+                mock.patch.object(
+                    launcher.adapter,
+                    "_git_output",
+                    side_effect=git_output,
+                ),
+                mock.patch.object(launcher, "run_command") as run,
+            ):
+                self.assertEqual(
+                    (control, common_dir, expected),
+                    launcher.prepare_control_worktree(root),
+                )
+
+            self.assertEqual(2, run.call_count)
+            self.assertEqual("worktree", run.call_args_list[0].args[0][3])
+            self.assertEqual("switch", run.call_args_list[1].args[0][3])
+
+    def test_prepare_control_worktree_refuses_local_changes_before_switch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "emmet-qt-book"
+            control = launcher.control_worktree_path(root)
+            common_dir = root / ".git"
+            control.mkdir(parents=True)
+
+            def git_layout(workdir: Path) -> tuple[Path, Path]:
+                return (root, common_dir) if workdir == root else (control, common_dir)
+
+            def git_output(_workdir: Path, *arguments: str) -> str:
+                if arguments == ("rev-parse", launcher.adapter.TRUSTED_REF):
+                    return "a" * 40
+                if arguments == ("remote", "get-url", "origin"):
+                    return "git@example.invalid:repo.git"
+                if arguments == (
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                ):
+                    return "?? local-note.txt"
+                self.fail(f"unexpected git query: {arguments}")
+
+            with (
+                mock.patch.object(
+                    launcher.adapter,
+                    "_git_root_and_common_dir",
+                    side_effect=git_layout,
+                ),
+                mock.patch.object(launcher.adapter, "refresh_trusted_main"),
+                mock.patch.object(
+                    launcher.adapter,
+                    "_git_output",
+                    side_effect=git_output,
+                ),
+                mock.patch.object(launcher, "run_command") as run,
+            ):
+                with self.assertRaisesRegex(
+                    launcher.LauncherError, "control worktree 不乾淨"
+                ):
+                    launcher.prepare_control_worktree(root)
+
+            run.assert_not_called()
+
+    def test_control_reexec_uses_latest_worktree_and_canonical_root(self) -> None:
+        command = launcher.build_control_reexec_command(
+            Path("/workspace/emmet-qt-book-loop-control"),
+            Path("/workspace/emmet-qt-book"),
+            ["restart", "--no-attach"],
+        )
+        self.assertEqual(
+            "/workspace/emmet-qt-book-loop-control/scripts/codex-loop",
+            command[0],
+        )
+        self.assertEqual("tmux", command[1])
+        self.assertIn("--repository-root", command)
+        self.assertIn("/workspace/emmet-qt-book", command)
+        self.assertIn("--trusted-control", command)
+
+    def test_trusted_control_flag_cannot_bypass_launcher_source(self) -> None:
+        repository_root = Path("/workspace/emmet-qt-book")
+        common_dir = repository_root / ".git"
+        control = launcher.control_worktree_path(repository_root)
+
+        def git_layout(workdir: Path) -> tuple[Path, Path]:
+            if workdir == repository_root:
+                return repository_root, common_dir
+            return Path("/workspace/tasks/stale-feature"), common_dir
+
+        with (
+            mock.patch.object(
+                launcher.adapter,
+                "_git_root_and_common_dir",
+                side_effect=git_layout,
+            ),
+            mock.patch.object(
+                launcher, "prepare_control_worktree"
+            ) as prepare,
+        ):
+            with self.assertRaisesRegex(
+                launcher.LauncherError, "dedicated control worktree"
+            ):
+                launcher.validate_loaded_control_worktree(
+                    repository_root, control
+                )
+
+        prepare.assert_not_called()
+
+    def test_main_bootstraps_mutating_start_from_any_checkout(self) -> None:
+        with (
+            mock.patch.object(
+                launcher, "bootstrap_control_launcher", return_value=17
+            ) as bootstrap,
+            mock.patch.object(launcher, "launch") as launch,
+        ):
+            self.assertEqual(17, launcher.main(["restart", "--no-attach"]))
+
+        bootstrap.assert_called_once_with(["restart", "--no-attach"])
+        launch.assert_not_called()
+
+    def test_main_dry_run_does_not_sync_control_worktree(self) -> None:
+        with (
+            mock.patch.object(launcher, "bootstrap_control_launcher") as bootstrap,
+            mock.patch.object(launcher, "launch", return_value=0) as launch,
+        ):
+            self.assertEqual(0, launcher.main(["restart", "--dry-run"]))
+
+        bootstrap.assert_not_called()
+        launch.assert_called_once()
+
+    def test_main_reexecs_when_main_moves_after_control_load(self) -> None:
+        with (
+            mock.patch.object(
+                launcher,
+                "launch",
+                side_effect=launcher.ControlReloadRequired("main moved"),
+            ),
+            mock.patch.object(
+                launcher, "bootstrap_control_launcher", return_value=23
+            ) as bootstrap,
+        ):
+            self.assertEqual(
+                23,
+                launcher.main(["restart", "--trusted-control"]),
+            )
+
+        bootstrap.assert_called_once_with(
+            ["restart", "--trusted-control"]
         )
 
     def test_commands_start_agents_before_events_and_share_profile(self) -> None:
@@ -319,7 +543,8 @@ class CodexLoopTmuxTests(unittest.TestCase):
             common_dir = repository_root / ".git"
             common_dir.mkdir(parents=True)
             runners = launcher.runner_workdirs(repository_root)
-            adapter_path = runners["dispatcher"] / "scripts" / "codex-loop"
+            control_worktree = launcher.control_worktree_path(repository_root)
+            adapter_path = control_worktree / "scripts" / "codex-loop"
             adapter_path.parent.mkdir(parents=True)
             adapter_path.write_text("#!/bin/sh\n", encoding="utf-8")
             adapter_path.chmod(0o755)
@@ -384,6 +609,14 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 ) as prepare,
                 mock.patch.object(
                     launcher,
+                    "prepare_control_worktree",
+                    side_effect=lambda *_args, **_kwargs: (
+                        order.append("sync-control")
+                        or (control_worktree, common_dir, "a" * 40)
+                    ),
+                ),
+                mock.patch.object(
+                    launcher,
                     "run_command",
                     side_effect=lambda command, **_kwargs: (
                         order.append("start") or self.completed()
@@ -402,13 +635,24 @@ class CodexLoopTmuxTests(unittest.TestCase):
 
             self.assertEqual(0, result)
             self.assertEqual(
-                ["owned", "parent", "wait", "stop", "owned", "kill", "sync", "start"],
+                [
+                    "owned",
+                    "parent",
+                    "wait",
+                    "stop",
+                    "owned",
+                    "kill",
+                    "sync",
+                    "sync-control",
+                    "start",
+                ],
                 order,
             )
             self.assertFalse(prepare.call_args.kwargs["validate_loaded_control"])
             command = run.call_args.args[0]
             self.assertEqual(str(adapter_path), command[0])
             self.assertIn("--repository-root", command)
+            self.assertIn("--trusted-control", command)
             self.assertIn("--no-attach", command)
             self.assertIn("--dispatcher-profile", command)
             self.assertIn("loop-dispatcher", command)

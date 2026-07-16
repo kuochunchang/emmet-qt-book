@@ -467,6 +467,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "drain-and-rotate",
             "control_inputs_match",
             "rotation-state.json",
+            "emmet-qt-book-loop-control",
+            "Git common-dir",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, protocol)
@@ -476,6 +478,7 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         self.assertIn(".claude/skills/", agents)
         self.assertIn(".agents/skills/", agents)
         self.assertIn("不安裝或啟用主機 scheduler", agents)
+        self.assertIn("dedicated `*-loop-control` worktree", agents)
 
     def test_cross_client_roles_share_the_bounded_context_contract(self) -> None:
         procedures = []
@@ -545,6 +548,9 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "operator-resolved",
             "terminal bell",
             "Meta Issue #1",
+            "emmet-qt-book-loop-control",
+            "tracked／untracked",
+            "control_bootstrap=true",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runbook)

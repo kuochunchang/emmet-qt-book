@@ -30,6 +30,7 @@ except ImportError:  # Direct execution through scripts/codex-loop.
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SESSION = "emmet-qt-book-loop"
+CONTROL_WORKTREE_SUFFIX = "-loop-control"
 SESSION_MARKER = "@emmet_loop_common_dir"
 SESSION_PROFILES = "@emmet_loop_codex_profiles"
 SESSION_CODEX_CONFIGURATION = "@emmet_loop_codex_configuration"
@@ -40,6 +41,10 @@ PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 class LauncherError(ValueError):
     """A fail-closed launcher error with an operator-facing message."""
+
+
+class ControlReloadRequired(LauncherError):
+    """The trusted main moved after this launcher process was loaded."""
 
 
 def emit(**fields: object) -> None:
@@ -157,6 +162,180 @@ def runner_workdirs(repository_root: Path = REPOSITORY_ROOT) -> dict[str, Path]:
         role: root.parent / f"{root.name}-{role}"
         for role in adapter.ROLES
     }
+
+
+def control_worktree_path(repository_root: Path) -> Path:
+    """Return the dedicated worktree that is allowed to load the launcher."""
+
+    root = repository_root.expanduser().resolve()
+    return root.parent / f"{root.name}{CONTROL_WORKTREE_SUFFIX}"
+
+
+def resolve_repository_layout(
+    explicit_root: Path | None = None,
+    *,
+    loaded_worktree: Path = REPOSITORY_ROOT,
+) -> tuple[Path, Path]:
+    """Resolve the canonical checkout independently of the invoking worktree."""
+
+    _, loaded_common_dir = adapter._git_root_and_common_dir(
+        loaded_worktree.expanduser().resolve()
+    )
+    repository_root = (
+        explicit_root.expanduser().resolve()
+        if explicit_root is not None
+        else loaded_common_dir.parent.resolve()
+    )
+    root, common_dir = adapter._git_root_and_common_dir(repository_root)
+    if root != repository_root:
+        raise LauncherError(
+            f"repository root 必須指向 canonical worktree root：{root}"
+        )
+    if common_dir != loaded_common_dir:
+        raise LauncherError(
+            "repository root 不屬於目前 launcher repository"
+        )
+    return root, common_dir
+
+
+def prepare_control_worktree(
+    repository_root: Path,
+    control_worktree: Path | None = None,
+) -> tuple[Path, Path, str]:
+    """Create or fast-forward the clean detached launcher control worktree."""
+
+    root, common_dir = adapter._git_root_and_common_dir(repository_root)
+    control = (
+        control_worktree.expanduser().resolve()
+        if control_worktree is not None
+        else control_worktree_path(root)
+    )
+    adapter.refresh_trusted_main(root)
+    expected = adapter._git_output(root, "rev-parse", adapter.TRUSTED_REF)
+    root_origin = adapter._git_output(root, "remote", "get-url", "origin")
+
+    if not control.exists():
+        run_command(
+            [
+                "git",
+                "-C",
+                str(root),
+                "worktree",
+                "add",
+                "--detach",
+                str(control),
+                adapter.TRUSTED_REF,
+            ]
+        )
+
+    control_root, control_common_dir = adapter._git_root_and_common_dir(control)
+    if control_root != control or control_common_dir != common_dir:
+        raise LauncherError(
+            f"control worktree 不屬於本 repository：{control}"
+        )
+    if adapter._git_output(control, "remote", "get-url", "origin") != root_origin:
+        raise LauncherError(f"control worktree origin 不一致：{control}")
+    dirty = adapter._git_output(
+        control, "status", "--porcelain", "--untracked-files=all"
+    )
+    if dirty:
+        raise LauncherError(
+            f"control worktree 不乾淨，拒絕更新：{control}\n{dirty}"
+        )
+
+    run_command(
+        [
+            "git",
+            "-C",
+            str(control),
+            "switch",
+            "--detach",
+            adapter.TRUSTED_REF,
+        ]
+    )
+    head = adapter._git_output(control, "rev-parse", "HEAD")
+    branch = adapter._git_output(control, "rev-parse", "--abbrev-ref", "HEAD")
+    dirty_after = adapter._git_output(
+        control, "status", "--porcelain", "--untracked-files=all"
+    )
+    if head != expected or branch != "HEAD" or dirty_after:
+        raise LauncherError(
+            f"control worktree 未乾淨 detached 對齊 origin/main：{control}"
+        )
+    return control, common_dir, expected
+
+
+def validate_loaded_control_worktree(
+    repository_root: Path,
+    control_worktree: Path,
+) -> None:
+    """Fail before lifecycle changes unless this process came from trusted main."""
+
+    loaded_root, loaded_common_dir = adapter._git_root_and_common_dir(
+        REPOSITORY_ROOT.resolve()
+    )
+    _, repository_common_dir = adapter._git_root_and_common_dir(
+        repository_root
+    )
+    if (
+        loaded_root != control_worktree
+        or loaded_common_dir != repository_common_dir
+    ):
+        raise LauncherError(
+            "start/restart 必須由 dedicated control worktree 載入"
+        )
+    adapter.refresh_trusted_main(repository_root)
+    expected = adapter._git_output(
+        repository_root, "rev-parse", adapter.TRUSTED_REF
+    )
+    dirty = adapter._git_output(
+        loaded_root, "status", "--porcelain", "--untracked-files=all"
+    )
+    if dirty:
+        raise LauncherError(
+            f"control worktree 不乾淨，拒絕啟動：{loaded_root}\n{dirty}"
+        )
+    branch = adapter._git_output(
+        loaded_root, "rev-parse", "--abbrev-ref", "HEAD"
+    )
+    if branch != "HEAD":
+        raise LauncherError("launcher control worktree 必須是 detached HEAD")
+    if adapter._git_output(loaded_root, "rev-parse", "HEAD") != expected:
+        raise ControlReloadRequired(
+            "origin/main 在 launcher 載入後前進；重新載入 control worktree"
+        )
+    adapter._validate_control_inputs(loaded_root)
+
+
+def build_control_reexec_command(
+    control_worktree: Path,
+    repository_root: Path,
+    arguments: Sequence[str],
+) -> list[str]:
+    adapter_path = control_worktree / "scripts" / "codex-loop"
+    return [
+        str(adapter_path),
+        "tmux",
+        *arguments,
+        "--repository-root",
+        str(repository_root),
+        "--trusted-control",
+    ]
+
+
+def bootstrap_control_launcher(arguments: Sequence[str]) -> int:
+    """Sync the dedicated control worktree and replace this bootstrap process."""
+
+    repository_root, common_dir = resolve_repository_layout()
+    control, prepared_common_dir, _ = prepare_control_worktree(repository_root)
+    if prepared_common_dir != common_dir:
+        raise LauncherError("control worktree Git common-dir 在 bootstrap 期間改變")
+    adapter_path = control / "scripts" / "codex-loop"
+    if not adapter_path.is_file() or not os.access(adapter_path, os.X_OK):
+        raise LauncherError(f"control worktree launcher 不可執行：{adapter_path}")
+    command = build_control_reexec_command(control, repository_root, arguments)
+    os.execv(str(adapter_path), command)
+    return 0
 
 
 def build_component_commands(
@@ -943,6 +1122,8 @@ def status_report(
     runtime_dir: Path,
     profile: str | None,
     role_profiles: Mapping[str, str | None] | None = None,
+    *,
+    control_worktree: Path | None = None,
 ) -> None:
     exists = session_exists(tmux_bin, session)
     marker = session_marker(tmux_bin, session) if exists else None
@@ -977,6 +1158,11 @@ def status_report(
         session_marker=marker,
         runtime_dir=str(runtime_dir),
         active_components=active_components(runtime_dir),
+        control_worktree=(
+            runner_git_state(control_worktree)
+            if control_worktree is not None
+            else None
+        ),
         runners={
             role: runner_git_state(workdir)
             for role, workdir in runners.items()
@@ -1000,6 +1186,8 @@ def dry_run_plan(
     commands: Mapping[str, Sequence[str]],
     profile: str | None,
     role_profiles: Mapping[str, str | None] | None = None,
+    *,
+    control_worktree: Path | None = None,
 ) -> None:
     exists = session_exists(tmux_bin, session)
     marker = session_marker(tmux_bin, session) if exists else None
@@ -1013,6 +1201,10 @@ def dry_run_plan(
         session_exists=exists,
         session_owned=marker == str(common_dir) if exists else None,
         runtime_dir=str(runtime_dir),
+        control_worktree=(
+            str(control_worktree) if control_worktree is not None else None
+        ),
+        control_bootstrap=action in ("start", "restart"),
         panes={
             "top-left": "dispatcher",
             "top-right": "coder",
@@ -1128,6 +1320,7 @@ def build_rotated_start_command(
         "start",
         "--repository-root",
         str(repository_root),
+        "--trusted-control",
         "--session",
         options.session,
         "--tmux-bin",
@@ -1196,9 +1389,14 @@ def rotate_session(
     )
     if prepared_common_dir != common_dir:
         raise LauncherError("runner Git common-dir 在換代期間改變")
-    adapter_path = runners["dispatcher"] / "scripts" / "codex-loop"
+    control_worktree, control_common_dir, control_main_sha = (
+        prepare_control_worktree(repository_root)
+    )
+    if control_common_dir != common_dir or control_main_sha != main_sha:
+        raise LauncherError("control worktree 在換代期間未對齊 runners")
+    adapter_path = control_worktree / "scripts" / "codex-loop"
     if not adapter_path.is_file() or not os.access(adapter_path, os.X_OK):
-        raise LauncherError(f"換代後 trusted adapter 不可執行：{adapter_path}")
+        raise LauncherError(f"換代後 control launcher 不可執行：{adapter_path}")
     update_rotation_state(
         state_path,
         state="starting-session",
@@ -1227,18 +1425,11 @@ def rotate_session(
 
 
 def launch(options: argparse.Namespace) -> int:
-    repository_root = (
-        options.repository_root.expanduser().resolve()
-        if options.repository_root is not None
-        else REPOSITORY_ROOT.resolve()
+    repository_root, common_dir = resolve_repository_layout(
+        options.repository_root
     )
+    control_worktree = control_worktree_path(repository_root)
     runners = runner_workdirs(repository_root)
-    _, common_dir = adapter._git_root_and_common_dir(repository_root)
-    _, loaded_common_dir = adapter._git_root_and_common_dir(
-        REPOSITORY_ROOT.resolve()
-    )
-    if loaded_common_dir != common_dir:
-        raise LauncherError("--repository-root 不屬於目前 trusted adapter repository")
     runtime_dir = adapter.default_lock_dir(common_dir)
     tmux_bin = resolve_executable(options.tmux_bin, "tmux")
     profiles = resolve_role_profiles(
@@ -1257,6 +1448,14 @@ def launch(options: argparse.Namespace) -> int:
             common_dir,
             runtime_dir,
             tmux_bin,
+        )
+    if (
+        options.action in ("start", "restart")
+        and options.trusted_control
+        and not options.dry_run
+    ):
+        validate_loaded_control_worktree(
+            repository_root, control_worktree
         )
     adapter_path = runners["dispatcher"] / "scripts" / "codex-loop"
     commands = build_component_commands(
@@ -1280,6 +1479,7 @@ def launch(options: argparse.Namespace) -> int:
             runtime_dir,
             options.profile,
             profiles,
+            control_worktree=control_worktree,
         )
         return 0
 
@@ -1297,6 +1497,7 @@ def launch(options: argparse.Namespace) -> int:
             commands,
             options.profile,
             profiles,
+            control_worktree=control_worktree,
         )
         return 0
 
@@ -1418,6 +1619,7 @@ def launch(options: argparse.Namespace) -> int:
         codex_profiles=profiles,
         codex_role_configuration=codex_role_configuration(profiles),
         codex_profile_source="session",
+        control_worktree=str(control_worktree),
     )
 
     if options.no_attach:
@@ -1462,6 +1664,9 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--repository-root", type=Path, help=argparse.SUPPRESS
+    )
+    result.add_argument(
+        "--trusted-control", action="store_true", help=argparse.SUPPRESS
     )
     result.add_argument(
         "--profile",
@@ -1525,9 +1730,28 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    options = parser().parse_args(arguments)
+    raw_arguments = list(arguments) if arguments is not None else sys.argv[1:]
+    options = parser().parse_args(raw_arguments)
     try:
+        if (
+            options.action in ("start", "restart")
+            and not options.dry_run
+            and not options.trusted_control
+        ):
+            return bootstrap_control_launcher(raw_arguments)
         return launch(options)
+    except ControlReloadRequired as error:
+        if (
+            options.action in ("start", "restart")
+            and options.trusted_control
+            and not options.dry_run
+        ):
+            try:
+                return bootstrap_control_launcher(raw_arguments)
+            except (LauncherError, ValueError, OSError) as reload_error:
+                error = reload_error
+        print(f"codex-loop tmux: {error}", file=sys.stderr)
+        return 2
     except (LauncherError, ValueError, OSError) as error:
         if options.action == "rotate" and options.rotation_state is not None:
             try:

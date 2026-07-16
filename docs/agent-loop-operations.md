@@ -83,18 +83,19 @@ Checkpoint 期間：
    一致。
 2. `codex` 與 `gh` 已登入；帳號能 fetch repository、讀寫 loop labels／comments 及
    操作 PR。
-3. Trusted runners 是本 repository 的乾淨 linked worktree，不含候選 PR 內容，也
-   不拿來 checkout task branch。
+3. Dedicated launcher control worktree 與三個 trusted runners 都是本 repository 的
+   乾淨 linked worktree，不含候選 PR 內容，也不拿來 checkout task branch。
 4. Meta Issue #1 沒有 `loop:paused`。
-5. 四個 component 都由最新 `origin/main` 的同一版 adapter 啟動；不要混用舊 runner
-   上的 script。
+5. Lifecycle launcher 從最新 `origin/main` 的 dedicated control worktree 載入，四個
+   component 再由同一版 trusted adapter 啟動；不要從主要 checkout 或候選 worktree
+   載入 control inputs。
 
 Repo 不安裝 cron、systemd unit 或其他主機 scheduler；此模型本身不需要定時器，
 polling 由 `events` process 內建。
 
 ## tmux 一鍵生命週期（建議入口）
 
-從主要 checkout 的空終端執行：
+可從本 repository 任一 linked worktree 的空終端執行；以下仍以主要 checkout 為例：
 
 ```bash
 cd /home/guojun/workspace/emmet-qt-book
@@ -102,6 +103,13 @@ cd /home/guojun/workspace/emmet-qt-book
 ./scripts/codex-loop tmux status
 ./scripts/codex-loop tmux start
 ```
+
+`start`／`restart` 不會以呼叫端 worktree 作為 control source。它們先用 Git common-dir
+找出 canonical checkout，建立或驗證同層的
+`/home/guojun/workspace/emmet-qt-book-loop-control`，拒絕任何 tracked／untracked 變更，
+將該 worktree detached 對齊最新 `origin/main`，再以其中的 launcher 重新執行命令。
+因此主要 checkout 可停在正常 feature branch；不必為啟動 loop 而切換、merge 或 reset。
+已建立 control worktree 後，也可直接從它執行相同命令。
 
 `start` 只用於確認目前沒有 loop component 或同名 session 的首次啟動；任一 lock
 或 session 已存在就 fail closed，不會偷偷啟動第二份。要把既有的手動四終端部署
@@ -111,11 +119,12 @@ cd /home/guojun/workspace/emmet-qt-book
 ./scripts/codex-loop tmux restart
 ```
 
-`restart` 會先停止 event manager，再停止 dispatcher、coder、reviewer，等待各自
-釋放 lock；接著清除本 launcher 擁有的舊 session、fetch `origin/main`、建立缺少
-的 dedicated runner、拒絕不乾淨 runner，並把三個 runner 切到同一個
-`origin/main`。四項預檢通過後才清掉 stale socket 並開 tmux；三個 agent socket
-都 ready 之後，右下角 event manager 才會啟動。
+`restart` 先在不停止現有 component 的前提下完成 control worktree bootstrap 與驗證；
+失敗時不碰既有 session。之後才停止 event manager，再停止 dispatcher、coder、
+reviewer，等待各自釋放 lock；接著清除本 launcher 擁有的舊 session、建立缺少的
+dedicated runner、拒絕不乾淨 runner，並把三個 runner 切到同一個 `origin/main`。
+四項預檢通過後才清掉 stale socket 並開 tmux；三個 agent socket 都 ready 之後，
+右下角 event manager 才會啟動。
 
 預設 session 名稱是 `emmet-qt-book-loop`，版面固定為：
 
@@ -157,7 +166,7 @@ event manager 每次 poll 輸出的完整 `operator-status`。其中先讀
 | `health=healthy` | state 合法；依 `owner`／`next` 等待下一個 transaction |
 | `health=running` | 一個 role 正在執行；先等待，不手動啟動第二輪 |
 | `health=draining` | control inputs 已更新；manager 停止派送並等待目前 child 結束 |
-| `health=rotating` | detached rotator 正在驗證、同步 runners、preflight 與重建 session |
+| `health=rotating` | detached rotator 正在驗證、同步 control worktree／runners、preflight 與重建 session |
 | `health=awaiting-user` | gate exit 已綁定目前 `main` 且沒有 WIP；等待使用者核准 transition |
 | `health=paused` | 使用者的 durable brake 生效；確認安全後仍只由使用者移除 |
 | `health=blocked` | 讀 `reason`／`attention`，修復 state、component 或 GitHub 讀取 |
@@ -203,14 +212,16 @@ tmux attach-session -t emmet-qt-book-loop
 其他生命週期命令：
 
 ```bash
-# 純讀取：session ownership、active locks、runner HEAD／乾淨狀態
+# 純讀取：session ownership、active locks、control／runner HEAD 與乾淨狀態
 ./scripts/codex-loop tmux status
 
 # 可重複執行：有序停止並只清除本 launcher 擁有的 session
 ./scripts/codex-loop tmux stop
 ```
 
-`stop` 與 `restart` 都先核對 lock metadata、PID command identity 與 tmux
+`status`／`stop`／`--dry-run` 不 fetch 或移動 control worktree；`--dry-run` 只列出預計
+使用的 control 路徑與 `control_bootstrap=true`。`stop` 與 `restart` 都先核對 lock
+metadata、PID command identity 與 tmux
 ownership marker；同名 session 若不是本 launcher 建立就拒絕處理，也不使用模糊的
 `pkill` 或無條件 `kill -9`。正常停止會讓 busy agent 把 SIGTERM 轉給其 Codex
 child process group。啟動中途失敗時，launcher 會有序停止已起來的 component、
@@ -265,8 +276,10 @@ Profile 檔格式與優先序見
 
 ## 建立 dedicated trusted runners
 
-以下範例假設主要 checkout 位於
-`/home/guojun/workspace/emmet-qt-book`：
+以下範例假設 canonical checkout 位於
+`/home/guojun/workspace/emmet-qt-book`。Launcher control worktree
+`emmet-qt-book-loop-control` 由 `tmux start/restart` 自動建立與同步；下列只是在缺少時
+建立三個 role runners：
 
 ```bash
 git -C /home/guojun/workspace/emmet-qt-book fetch origin main --prune
@@ -414,8 +427,11 @@ state 恢復，不需人工先改 label 或重送事件。
    ```
 
 4. 不乾淨或無法 switch 時停止，不得以 `reset --hard` 掩蓋未知變更。
-5. 重跑四項 dry-run。Gate transition 依 checkpoint 程序先人工觀察第一圈；其他
-   control-input 更新則在確認版本一致後依「啟動」順序重開。
+5. 重跑四項 dry-run。Gate transition 依 checkpoint 程序先完成人工 Dispatcher 派工與
+   唯一 `loop:queued` 核對；其他 control-input 更新則完成必要 reconciliation。
+6. 準備重開完整 components 時執行 `tmux restart`；bootstrap 會以相同規則建立或同步
+   `/home/guojun/workspace/emmet-qt-book-loop-control`。Control worktree 不乾淨或不屬於
+   same-repo 時，launcher 會在停止既有 components 前 fail closed。
 
 ## 暫停、恢復與停止
 
