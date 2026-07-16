@@ -50,8 +50,11 @@ description: "Execute exactly one idempotent dispatcher iteration for the emmet-
    - 若 approved 的 `Reviewed-Head` 與目前 `headRefOid` 不同，機械性撤銷 stale approval，
      先留含 reviewed／current SHA 的穩定 reconciliation marker，再以期望的完整 label
      set 轉回 `loop:needs-review` 並重查；不要自行做品質裁決或在同輪處理第二件事。
-2. 在派工前判斷 active gate 退出條件。證據已齊就彙整完成 Issue／PR／merge SHA、通知
-   使用者並結束；核准 transition 前不得派下一 gate。
+2. 在派工前判斷 active gate 退出條件。證據已齊就彙整完成 Issue／PR／merge SHA，在
+   Meta Issue #1 留下署名通知與精確 marker
+   `<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->`，然後結束；先搜尋
+   相同 marker，存在就不重複留言。Marker 只代表目前 `main` 的退出 checkpoint，讓
+   event manager 在無 WIP 時進入 `awaiting-user`；核准 transition 前不得派下一 gate。
 3. 若有 unblocked `loop:approved` PR，執行合併前檢查：
    - 最新 Reviewer 裁決留言含目前完整 `Reviewed-Head` SHA，且 `Reviewed-Base` 等於
      最新 `origin/main`；任一 SHA 過期都轉回 `loop:needs-review`；

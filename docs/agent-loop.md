@@ -244,12 +244,27 @@ Event manager 每次 poll 只讀 Meta Issue #1 與所有 open `loop:*` Issue／P
 | 一個 `loop:changes-requested` PR | coder |
 | 一個 `loop:needs-review` PR | reviewer |
 | 一個 queued／coding Issue，尚無 PR | coder |
-| 沒有 loop WIP | dispatcher，做 reconciliation、gate exit 判斷或派工 |
+| 沒有 loop WIP，且 Meta Issue #1 有綁定目前 `main` 的 gate-exit marker | 不通知角色；進入 `awaiting-user` |
+| 沒有 loop WIP，且沒有目前 `main` 的 gate-exit marker | dispatcher，做 reconciliation、gate exit 判斷或派工 |
+
+Dispatcher 確認目前 gate 已退出時，Meta Issue #1 的署名留言必須含精確 marker：
+
+```text
+<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->
+```
+
+Manager 只接受最近 100 則留言中、由目前 `gh` viewer 自己建立，且完整 40 字元
+`MAIN_SHA` 正好等於 repository default `main` head 的 marker。這個 checkpoint 只在沒有
+loop WIP 時停止 role wake；任何 WIP 仍依表中較高優先序處理。`main` 前進、marker 過期、
+留言窗內找不到 marker 或無法驗證作者時一律 fail closed，重新交 dispatcher 判斷，不能
+把舊 gate exit 當成新狀態的完成證據。
 
 同一 fingerprint 被 agent ACK 後，manager 在預設 1800 秒內不重送；GitHub state 改變
-就立即形成新 fingerprint。Agent 不在線、socket 拒絕或沒有 ACK 時，不記為已送達，
-下次 poll 重試。Manager 重啟後可重送目前狀態；role iteration 必須靠 GitHub durable
-marker 保持冪等，不能依賴本機去重。
+就立即形成新 fingerprint。若已記錄的 iteration 完成但 routing-bearing state 沒有前進，
+manager 改判 `stalled` 並只做一次 dispatcher escalation，不再用 retry window 反覆喚醒
+原 owner。Agent 不在線、socket 拒絕、沒有 ACK，或尚無法確認 iteration 已完成時，才依
+poll／retry 規則重試。Manager 重啟後可重送目前狀態；role iteration 必須靠 GitHub
+durable marker 保持冪等，不能依賴本機去重。
 
 任何 Codex child 執行期間，manager 除 paused control event 外不送新的 wake，避免
 跨角色同時 mutation。在途 state 持續達預設 1800 秒且本輪沒有 child 時，manager
@@ -276,6 +291,7 @@ Codex。
 | `running` | `false` | 正好有一個 Codex iteration 執行中 |
 | `draining` | `false` | control inputs 已更新；停止派送並等待目前 child 結束 |
 | `rotating` | `false` | detached rotator 正在安全同步 runners 與重建 session |
+| `awaiting-user` | `false` | 目前 `main` 已有 gate-exit checkpoint 且沒有 WIP；等待使用者核准 transition |
 | `paused` | `true` | Meta Issue #1 的 `loop:paused` 正在阻止推進 |
 | `blocked` | `true` | state invariant、同時 busy、delivery 或 GitHub polling 有錯 |
 | `stalled` | `true` | owner iteration 已完成，但 durable workflow state 沒前進 |
@@ -283,7 +299,8 @@ Codex。
 Agent 完成 iteration 時把最近四筆 event ID、reason、exit code 與完成時間寫入既有
 role lock metadata。Manager 以 delivery 當下和下一次 poll 的 workflow fingerprint
 比較 label、Issue／PR 配對與 PR head／base 等 routing-bearing state；一般留言造成的
-`updatedAt` 不算進度。相同 owner／reason 的 iteration 已完成而 fingerprint 不變時，
+`updatedAt` 不算進度。唯一相關的留言內容是上述、被正規化成精簡 checkpoint 的
+gate-exit marker。相同 owner／reason 的 iteration 已完成而 fingerprint 不變時，
 輸出 `reason=no-durable-progress-after-iteration`，即使 child exit code 是 `0` 仍
 判為 `health=stalled`。後續 dispatcher 告警輪不會覆蓋這筆 canonical completion，
 因此 safety denial 或 no-op 不會被 ACK／retry window 暫時遮住。

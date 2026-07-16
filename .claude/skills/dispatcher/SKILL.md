@@ -21,7 +21,11 @@ description: agent 閉環的 one-shot 調度角色——恢復 GitHub durable st
    approval 先留含 reviewed／current SHA 的穩定 marker，再以期望的完整 label set
    機械性退回 `needs-review` 並退出。已有 durable marker 時不重複留言。
 4. 新動作優先序：
-   1. 在任何派工前檢查 gate exit；已完成只彙整 Issue／PR／merge SHA 並通知。
+   1. 在任何派工前檢查 gate exit；已完成只彙整 Issue／PR／merge SHA，並在 Meta
+      Issue #1 留下署名通知與精確 marker
+      `<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->`。先搜尋相同 marker，
+      存在就不重複留言；它只綁定目前 `main`，讓 event manager 在無 WIP 時進入
+      `awaiting-user`，不構成 gate transition 核准。
    2. 合併一個符合下方條件的 unblocked `approved` PR。
    3. 依 primary label timeline 處理超過 6 小時的停滯、第三次退件或圈外 PR。
    4. WIP 為零、無 blocked 且 gate 未退出時，依模板派一個 gate-scoped slice。

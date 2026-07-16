@@ -37,12 +37,25 @@ MAX_EVENT_BYTES = 64 * 1024
 MAX_COMPLETED_EVENTS = 4
 MAX_PANE_STATUS_CHARS = 48
 PANE_ID_PATTERN = re.compile(r"^%[0-9]+$")
+GATE_EXIT_MARKER_PATTERN = re.compile(
+    r"<!--\s*emmet-loop:dispatcher:gate-exit:"
+    r"(?P<gate>[A-Za-z0-9][A-Za-z0-9._-]{0,63}):"
+    r"main=(?P<main_sha>[0-9a-f]{40})\s*-->"
+)
 ROTATION_STATE_FILENAME = "rotation-state.json"
 EVENT_QUERY = """
 query EmmetLoopState($owner: String!, $name: String!, $search: String!) {
   repository(owner: $owner, name: $name) {
+    defaultBranchRef {
+      name
+      target { oid }
+    }
     meta: issue(number: 1) {
       labels(first: 20) { nodes { name } }
+      comments(last: 100) {
+        nodes { body createdAt url viewerDidAuthor }
+        pageInfo { hasPreviousPage }
+      }
     }
   }
   loopObjects: search(query: $search, type: ISSUE, first: 100) {
@@ -184,6 +197,8 @@ def operator_pane_status(
         return f"{prefix}：{alert_role}"
     if health == "paused":
         return "全域暫停"
+    if health == "awaiting-user":
+        return "等待使用者：gate transition"
     if health == "draining":
         return "換代：等待目前 iteration 結束"
     if health == "rotating":
@@ -555,6 +570,50 @@ def _label_names(node: Mapping[str, object] | None) -> list[str]:
     )
 
 
+def _default_main_sha(repository: Mapping[str, object]) -> str | None:
+    branch = repository.get("defaultBranchRef")
+    if not isinstance(branch, Mapping) or branch.get("name") != "main":
+        return None
+    target = branch.get("target")
+    oid = target.get("oid") if isinstance(target, Mapping) else None
+    if not isinstance(oid, str) or re.fullmatch(r"[0-9a-f]{40}", oid) is None:
+        return None
+    return oid
+
+
+def _current_gate_exit(
+    meta: Mapping[str, object] | None,
+    main_sha: str | None,
+) -> dict[str, object] | None:
+    """Return only a gate-exit marker bound to the current default main."""
+
+    if meta is None or main_sha is None:
+        return None
+    comments = meta.get("comments")
+    nodes = comments.get("nodes") if isinstance(comments, Mapping) else None
+    if not isinstance(nodes, list):
+        return None
+    for comment in reversed(nodes):
+        if not isinstance(comment, Mapping):
+            continue
+        if comment.get("viewerDidAuthor") is not True:
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        matches = list(GATE_EXIT_MARKER_PATTERN.finditer(body))
+        for match in reversed(matches):
+            if match.group("main_sha") != main_sha:
+                continue
+            return {
+                "gate": match.group("gate"),
+                "main_sha": main_sha,
+                "url": comment.get("url"),
+                "created_at": comment.get("createdAt"),
+            }
+    return None
+
+
 def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
     """Reduce GraphQL output to the durable state needed for routing."""
 
@@ -566,8 +625,19 @@ def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(repository, Mapping) or not isinstance(search, Mapping):
         raise ValueError("GitHub polling 回傳格式錯誤")
     meta = repository.get("meta")
+    meta_mapping = meta if isinstance(meta, Mapping) else None
     paused = "loop:paused" in _label_names(
-        meta if isinstance(meta, Mapping) else None
+        meta_mapping
+    )
+    main_sha = _default_main_sha(repository)
+    gate_exit = _current_gate_exit(meta_mapping, main_sha)
+    comments = meta_mapping.get("comments") if meta_mapping else None
+    page_info = (
+        comments.get("pageInfo") if isinstance(comments, Mapping) else None
+    )
+    meta_comments_truncated = bool(
+        isinstance(page_info, Mapping)
+        and page_info.get("hasPreviousPage") is True
     )
     nodes = search.get("nodes")
     if not isinstance(nodes, list):
@@ -603,6 +673,9 @@ def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
     key = lambda item: int(item["number"])
     return {
         "paused": paused,
+        "main_sha": main_sha,
+        "gate_exit": gate_exit,
+        "meta_comments_truncated": meta_comments_truncated,
         "issues": sorted(issues, key=key),
         "pull_requests": sorted(pull_requests, key=key),
     }
@@ -708,6 +781,13 @@ def classify_snapshot(snapshot: Mapping[str, object]) -> list[dict[str, object]]
             }
         ]
 
+    gate_exit = snapshot.get("gate_exit")
+    if (
+        isinstance(gate_exit, Mapping)
+        and gate_exit.get("main_sha") == snapshot.get("main_sha")
+    ):
+        return []
+
     return [
         {
             "role": "dispatcher",
@@ -754,6 +834,15 @@ def workflow_state_fingerprint(snapshot: Mapping[str, object]) -> str:
 
     canonical = {
         "paused": snapshot.get("paused") is True,
+        "main_sha": snapshot.get("main_sha"),
+        "gate_exit": (
+            {
+                "gate": snapshot["gate_exit"].get("gate"),
+                "main_sha": snapshot["gate_exit"].get("main_sha"),
+            }
+            if isinstance(snapshot.get("gate_exit"), Mapping)
+            else None
+        ),
         "issues": stable_items("issues"),
         "pull_requests": stable_items("pull_requests"),
     }
@@ -841,8 +930,6 @@ def detect_stalled_iteration(
     if len(current) != 1 or current[0].get("action") != "wake":
         return None
     decision = current[0]
-    if decision.get("reason") == "reconcile-or-dispatch":
-        return None
     role = decision.get("role")
     if not isinstance(role, str):
         return None
@@ -997,6 +1084,29 @@ def describe_operator_status(
             next_step=(
                 "等待目前 iteration 結束；event manager 下一次 poll 會重新讀取"
                 " GitHub durable state，並檢查是否確實前進。"
+            ),
+        )
+
+    gate_exit = snapshot.get("gate_exit")
+    if (
+        not objects
+        and isinstance(gate_exit, Mapping)
+        and gate_exit.get("main_sha") == snapshot.get("main_sha")
+    ):
+        gate = str(gate_exit.get("gate") or "目前 gate")
+        main_sha = str(gate_exit.get("main_sha") or "")
+        return status(
+            health="awaiting-user",
+            blocking=False,
+            owner="user",
+            reason="gate-transition-awaiting-user",
+            current=(
+                f"{gate} 退出證據已綁定 main@{main_sha}；"
+                "目前沒有 active loop work item。"
+            ),
+            next_step=(
+                "等待使用者依 AGENTS.md 核准並執行 gate transition；"
+                "GitHub durable state 改變前不啟動 Codex。"
             ),
         )
 
