@@ -7,6 +7,77 @@ schema_version = 2
 W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
 
 [[records]]
+id = "ch18-v030-bar-matching-assumptions"
+batch = "W1"
+document = "manuscript/chapters/18-backtest-matching-is-not-exchange.md"
+chapter = "回測撮合不是交易所"
+claim = "v0.3.0 的 ExecutionOpenEvent、BarFillMode 與 FillSimulator 以明示規則重現 next-open 市價、strict／touch 限價資格、gap-through、固定 bar path、price-time、全 bar 共用 volume pool、方向性 taker 滑點與費用；輸出同時揭露 previous-closed-bar volume proxy 與本地 marketable-limit maker 假設，不把模擬成交冒充交易所事實。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：本項使用程式內固定 Decimal 訂單、OHLCV 與已發布撮合聚焦測試，不載入或保存市場資料集。"
+formal_entrypoints = [
+  "quant.common.models.ExecutionOpenEvent",
+  "quant.common.fill.MatchingPolicy／FillConfig／FILL_ASSUMPTION_METADATA",
+  "quant.common.fill.BarFillMode.next_candidate",
+  "quant.common.fill.FillSimulator.propose_next",
+  "quant.common.fill.FillDecision",
+]
+schemas = [
+  "quant.common.models.Bar／MarketEvent／ExecutionOpenEvent",
+  "quant.common.fill.FillProposal／FillDecision／Liquidity",
+  "quant.common.fill.FeeSchedule／FillConfig／MatchingPolicy",
+]
+interface_note = "已發布 Python 模型只支持本地 bar 粒度的可重現撮合決定；它不是正式讀者回測 CLI、逐筆排隊／市場衝擊模型、交易所 connector 或真實成交證據。"
+evidence_refs = [
+  "book:manuscript/chapters/18-backtest-matching-is-not-exchange.md",
+  "book:manuscript/appendices/d-market-microstructure.md",
+  "book:manuscript/assets/ch18-bar-matching-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/config.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/mode.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/simulator.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/events.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_base.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_mode.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_matrix.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_simulator_edges.py",
+  "repo:emmet-qt-bt1:docs/quantitative-trading-system-design.md",
+  "repo:emmet-qt-bt1:docs/design/step-3b-fill-execution.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run pytest tests/unit/test_fill_base.py tests/unit/test_fill_mode.py tests/unit/test_fill_matrix.py tests/unit/test_fill_simulator_edges.py -q",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch18-bar-matching-oracle.py\"",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Python 3.12.3",
+  "89 passed",
+  "market=next-execution-open,base=100.0,final=100.05000,slippage_bps=5,liquidity=taker,fee_rate=0.0005,fee=0.050025000,fee_asset=USDT,accounting_ts=1700000000000",
+  "limit-threshold=strict:NO-FILL,touch:limit-touch@100",
+  "gap-through=BUY,limit=100,open=98.0,base=98.0,accounting=bar-close",
+  "flat-bar-path=O-H-L-C,sequence=sell-101>sell-102>buy-99>buy-98",
+  "volume-pool=bar-volume:10.0,cap:0.1,pool:1.00,limit:0.6,optimistic-market:0.40",
+  "metadata=market_open_volume_proxy=previous_closed_bar,marketable_limit_liquidity=maker_after_local_book_acceptance",
+  "chapter-18-bar-matching-oracle=PASS",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；Python 3.12.3；四組撮合聚焦測試 89 passed；helper 逐項核對 next execution-open 的 5 bps taker 滑點與 fee、strict／touch 邊界、gap-through base、flat 固定 path／price-time、1.00 共用 volume pool 的 0.6／0.40 分配，以及兩項唯讀假設 metadata。"
+known_differences = [
+  "OHLCV 不包含真實 bar 內路徑、排隊、價位成交量或自身市場衝擊；strict、touch、固定 path 與 volume cap 都是反事實模型輸入。",
+  "預設 slippage、maker／taker fee 與 previous-closed-bar volume proxy 是版本化教學假設，不支持目前交易所、私人帳戶費率或真實容量宣稱。",
+  "spot LIMIT 預設 admission 仍禁用；逐筆 TradeFootprintFillMode 只是設計預留，v0.3.0 未發布正式讀者回測、Testnet 或 Live 入口。",
+]
+verified_on = "2026-07-17"
+revalidation_triggers = [
+  "ExecutionOpenEvent、MatchingPolicy、FillConfig、FILL_ASSUMPTION_METADATA、BarFillMode 或 FillSimulator 語義改變",
+  "固定 helper 輸入／輸出、測試數量、PASS marker、path、volume pool、滑點或 fee 決定改變",
+  "配套基線 tag／commit 或 Chapter 18 內容狀態改變",
+]
+
+[[records]]
 id = "ch17-v030-order-lifecycle-canonical-guards"
 batch = "W1"
 document = "manuscript/chapters/17-order-intent-lifecycle-reports.md"
