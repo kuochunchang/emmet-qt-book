@@ -104,7 +104,7 @@ OHLCV 是期間摘要，不含真實 bar 內路徑、委託排隊或每個價位
 | 普通市價 | 下一 `ExecutionOpenEvent` 以 open 為 base；taker 才施加方向性滑點 | 不是同根 open，也不是市場衝擊估計 |
 | limit strict | BUY `low < limit`；SELL `high > limit` | 穿越仍不證明真實排隊成交 |
 | limit touch | BUY `low <= limit`；SELL `high >= limit` | 只作較樂觀敏感度，不冒充歷史事實 |
-| gap-through | BUY `open <= limit`、SELL `open >= limit` 時以較有利 open 為 base | 完整證據仍到 bar close；本地 maker 分類可能偏樂觀 |
+| gap-through 定價 | 先由選定的 strict／touch 門檻判斷資格；資格成立後，BUY `open <= limit`、SELL `open >= limit` 才以 open 為 base，否則用 limit | open 本身不是獨立成交資格；完整證據仍到 bar close；本地 maker 分類可能偏樂觀 |
 | 固定 path | long `O→L→H→C`；short／flat `O→H→L→C` | 是唯一反事實，不是真實逐筆路徑 |
 | price-time | 上行 SELL 低價先、下行 BUY 高價先；同價按 `placed_seq` | 呼叫或容器順序不得參與語義 |
 | volume cap | `bar.volume × cap` 是同一 close frame 的共用池 | 不是即時深度、價位量或真實容量 |

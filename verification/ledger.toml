@@ -11,7 +11,7 @@ id = "ch18-v030-bar-matching-assumptions"
 batch = "W1"
 document = "manuscript/chapters/18-backtest-matching-is-not-exchange.md"
 chapter = "回測撮合不是交易所"
-claim = "v0.3.0 的 ExecutionOpenEvent、BarFillMode 與 FillSimulator 以明示規則重現 next-open 市價、strict／touch 限價資格、gap-through、固定 bar path、price-time、全 bar 共用 volume pool、方向性 taker 滑點與費用；輸出同時揭露 previous-closed-bar volume proxy 與本地 marketable-limit maker 假設，不把模擬成交冒充交易所事實。"
+claim = "v0.3.0 的 ExecutionOpenEvent、BarFillMode 與 FillSimulator 以明示規則重現 next-open 市價、先判斷 strict／touch 限價資格再套用 gap-through 定價、固定 bar path、price-time、全 bar 共用 volume pool、方向性 taker 滑點與費用；輸出同時揭露 previous-closed-bar volume proxy 與本地 marketable-limit maker 假設，不把模擬成交冒充交易所事實。"
 content_state = "可操作"
 data_checksums = []
 data_checksum_note = "不適用：本項使用程式內固定 Decimal 訂單、OHLCV 與已發布撮合聚焦測試，不載入或保存市場資料集。"
@@ -57,6 +57,7 @@ oracle_stdout_contains = [
   "89 passed",
   "market=next-execution-open,base=100.0,final=100.05000,slippage_bps=5,liquidity=taker,fee_rate=0.0005,fee=0.050025000,fee_asset=USDT,accounting_ts=1700000000000",
   "limit-threshold=strict:NO-FILL,touch:limit-touch@100",
+  "limit-open-equality=strict:NO-FILL,touch:limit-gap-through@100.0",
   "gap-through=BUY,limit=100,open=98.0,base=98.0,accounting=bar-close",
   "flat-bar-path=O-H-L-C,sequence=sell-101>sell-102>buy-99>buy-98",
   "volume-pool=bar-volume:10.0,cap:0.1,pool:1.00,limit:0.6,optimistic-market:0.40",
@@ -64,7 +65,7 @@ oracle_stdout_contains = [
   "chapter-18-bar-matching-oracle=PASS",
 ]
 result = "pass"
-observed = "tag 與 HEAD 固定且 worktree 乾淨；Python 3.12.3；四組撮合聚焦測試 89 passed；helper 逐項核對 next execution-open 的 5 bps taker 滑點與 fee、strict／touch 邊界、gap-through base、flat 固定 path／price-time、1.00 共用 volume pool 的 0.6／0.40 分配，以及兩項唯讀假設 metadata。"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；Python 3.12.3；四組撮合聚焦測試 89 passed；helper 逐項核對 next execution-open 的 5 bps taker 滑點與 fee、strict／touch 資格先於 gap-through 定價（包含 open=low=limit edge）、gap-through base、flat 固定 path／price-time、1.00 共用 volume pool 的 0.6／0.40 分配，以及兩項唯讀假設 metadata。"
 known_differences = [
   "OHLCV 不包含真實 bar 內路徑、排隊、價位成交量或自身市場衝擊；strict、touch、固定 path 與 volume cap 都是反事實模型輸入。",
   "預設 slippage、maker／taker fee 與 previous-closed-bar volume proxy 是版本化教學假設，不支持目前交易所、私人帳戶費率或真實容量宣稱。",

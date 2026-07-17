@@ -169,7 +169,7 @@ def market_open_case() -> FillDecision:
     return decision
 
 
-def threshold_cases() -> tuple[FillProposal, FillProposal]:
+def threshold_cases() -> tuple[FillProposal, FillProposal, FillProposal]:
     touch_book = OrderBook({})
     touch_book.accept("touch", order(Side.BUY), accepted_ts=TS)
     event = close_event(open_=105.0, low=100.0)
@@ -178,13 +178,22 @@ def threshold_cases() -> tuple[FillProposal, FillProposal]:
     assert isinstance(touch, FillProposal)
     assert touch.reason == "limit-touch"
 
+    equality_book = OrderBook({})
+    equality_book.accept("open-equality", order(Side.BUY), accepted_ts=TS)
+    equality_event = close_event(open_=100.0, low=100.0)
+    assert proposal(equality_book, equality_event) is None
+    equality_touch = proposal(equality_book, equality_event, touch=True)
+    assert isinstance(equality_touch, FillProposal)
+    assert equality_touch.reason == "limit-gap-through"
+    assert equality_touch.base_price == dec("100.0")
+
     gap_book = OrderBook({})
     gap_book.accept("gap", order(Side.BUY), accepted_ts=TS)
     gap = proposal(gap_book, close_event(open_=98.0, low=95.0))
     assert isinstance(gap, FillProposal)
     assert gap.reason == "limit-gap-through"
     assert gap.base_price == dec("98.0")
-    return touch, gap
+    return touch, equality_touch, gap
 
 
 def fixed_path_case() -> list[str]:
@@ -250,7 +259,7 @@ def shared_volume_case() -> tuple[FillDecision, FillDecision]:
 
 def main() -> None:
     market = market_open_case()
-    touch, gap = threshold_cases()
+    touch, equality_touch, gap = threshold_cases()
     path = fixed_path_case()
     first, second = shared_volume_case()
     assert dict(FILL_ASSUMPTION_METADATA) == {
@@ -268,6 +277,10 @@ def main() -> None:
         f"fee_asset={market.fee_asset},accounting_ts={market.accounting_ts}"
     )
     print(f"limit-threshold=strict:NO-FILL,touch:{touch.reason}@{touch.base_price}")
+    print(
+        "limit-open-equality=strict:NO-FILL,"
+        f"touch:{equality_touch.reason}@{equality_touch.base_price}"
+    )
     print(
         f"gap-through=BUY,limit=100,open=98.0,base={gap.base_price},"
         "accounting=bar-close"
