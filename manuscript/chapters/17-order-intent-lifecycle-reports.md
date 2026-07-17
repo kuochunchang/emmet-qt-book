@@ -70,10 +70,8 @@
 配套 `v0.3.0` 發布的狀態機如下：
 
 ```text
-                 ┌──────────────────────────────┐
-                 │                              ▼
 NEW ──────────► PARTIALLY_FILLED ──────────► FILLED
- │                    │              └──────► PARTIALLY_FILLED
+ │                    ├──────► PARTIALLY_FILLED  (self-loop)
  │                    ├─────────────────────► CANCELED
  │                    ├─────────────────────► REJECTED
  │                    └─────────────────────► EXPIRED
