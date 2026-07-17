@@ -18,7 +18,7 @@ data_checksums = [
 ]
 data_checksum_note = "checksum 是 tests/fixtures/accounting/it3_golden.json 依 ensure_ascii=false、sort_keys=true、separators=(comma,colon) 重新 canonical serialization 後的 SHA-256，不是原始檔案 bytes checksum；fixture 只含固定 Phase 2／3 測試資料與 Decimal 字串，不是外部市場下載。"
 formal_entrypoints = [
-  "quant.common.fill.FundingSettlement.settle",
+  "quant.common.fill.FundingSettlement.calculate",
   "quant.common.engine.AccountingLedger.apply_funding",
   "quant.common.fill.LiquidationChecker.check",
   "quant.common.engine.AccountingLedger.apply_liquidation",
