@@ -191,7 +191,11 @@ G1–G4 隨章更新，並保持開啟到 `W1-final`。完整退出條件以 cur
   `snapshot_incomplete` 本身阻斷 mutation；其他 truncation 或證據歧義只在缺失證據會
   影響本輪決策時對缺口分頁。
 - 成功驗證只輸出 compact summary；失敗才輸出 bounded diagnostics。這只限制送入模型的
-  command output，不影響操作者看到完整 Codex JSONL event stream。
+  command output。Codex child 底層仍使用 JSONL；direct agent／events／one-shot 的
+  `--output-format auto` 在 TTY 顯示 pretty、pipe／redirect 保持 JSONL，tmux 五個
+  pane 則明確使用 pretty。Pretty 只是操作者顯示層；它將 Codex 原始 stdout
+  JSONL、child stderr 與 component JSONL 分檔保存在 repository 外的私有 runtime
+  log，不得成為 routing、授權或 durable workflow state。
 - Event manager 發現 `origin/main` 的 control inputs 改變時，必須停止派送新事件；
   有 child 時先 drain，idle 後只由 launcher-owned detached rotator 驗證 events
   PID／lock、session ownership、乾淨 runners 與 same-repo，再同步 dedicated control

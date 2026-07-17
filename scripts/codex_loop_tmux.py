@@ -386,6 +386,7 @@ def build_component_commands(
     tmux_bin: str = "tmux",
     session: str = DEFAULT_SESSION,
     repository_root: Path = REPOSITORY_ROOT,
+    output_format: str = "pretty",
 ) -> dict[str, list[str]]:
     commands = {
         role: [
@@ -397,6 +398,8 @@ def build_component_commands(
             "--tmux-title",
             "--tmux-bin",
             tmux_bin,
+            "--output-format",
+            output_format,
         ]
         for role in adapter.ROLES
     }
@@ -412,6 +415,10 @@ def build_component_commands(
         session,
         "--repository-root",
         str(repository_root),
+        "--output-format",
+        output_format,
+        "--rotation-output-format",
+        output_format,
         "--interval-seconds",
         str(interval_seconds),
         "--retry-seconds",
@@ -1374,6 +1381,8 @@ def build_rotated_start_command(
         "--tmux-bin",
         options.tmux_bin,
         "--no-attach",
+        "--output-format",
+        options.output_format,
         "--stop-timeout-seconds",
         str(options.stop_timeout_seconds),
         "--startup-timeout-seconds",
@@ -1516,6 +1525,7 @@ def launch(options: argparse.Namespace) -> int:
         tmux_bin=tmux_bin,
         session=options.session,
         repository_root=repository_root,
+        output_format=options.output_format,
     )
 
     if options.action == "status":
@@ -1602,6 +1612,7 @@ def launch(options: argparse.Namespace) -> int:
         tmux_bin=tmux_bin,
         session=options.session,
         repository_root=repository_root,
+        output_format=options.output_format,
     )
     run_preflight(adapter_path, runners, role_profiles=profiles)
 
@@ -1737,6 +1748,15 @@ def parser() -> argparse.ArgumentParser:
         "--no-attach",
         action="store_true",
         help="啟動後留在目前 shell，不 attach tmux。",
+    )
+    result.add_argument(
+        "--output-format",
+        choices=("auto", "pretty", "jsonl"),
+        default="pretty",
+        help=(
+            "五個 tmux pane 的顯示格式；pretty 保留 repo 外 raw log，"
+            "jsonl 顯示原始事件（預設 pretty）。"
+        ),
     )
     result.add_argument(
         "--dry-run",

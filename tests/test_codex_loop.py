@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import io
 import json
 import os
 from pathlib import Path
@@ -10,16 +11,21 @@ import stat
 import subprocess
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
+from unittest import mock
 
 from scripts.codex_loop import (
+    EX_TIMEOUT,
     build_command,
     default_lock_dir,
     default_workdir,
     role_execution_config,
+    run_child,
     validate_workdir,
 )
+from scripts.codex_loop_output import LoopOutput
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +63,7 @@ class CodexLoopAdapterTests(unittest.TestCase):
         scripts.mkdir()
         self.adapter = scripts / "codex_loop.py"
         shutil.copy2(ROOT / "scripts" / "codex_loop.py", self.adapter)
+        shutil.copy2(ROOT / "scripts" / "codex_loop_output.py", scripts)
         subprocess.run(
             ["git", "-C", str(self.worktree), "config", "user.email", "test@example.com"],
             check=True,
@@ -96,6 +103,14 @@ class CodexLoopAdapterTests(unittest.TestCase):
                 child_pid = os.environ.get("FAKE_CODEX_PID")
                 if child_pid:
                     Path(child_pid).write_text(str(os.getpid()), encoding="utf-8")
+                stdout = os.environ.get("FAKE_CODEX_STDOUT", "")
+                if stdout:
+                    sys.stdout.write(stdout)
+                    sys.stdout.flush()
+                stderr = os.environ.get("FAKE_CODEX_STDERR", "")
+                if stderr:
+                    sys.stderr.write(stderr)
+                    sys.stderr.flush()
                 time.sleep(float(os.environ.get("FAKE_CODEX_SLEEP", "0")))
                 raise SystemExit(int(os.environ.get("FAKE_CODEX_EXIT", "0")))
                 """
@@ -122,13 +137,20 @@ class CodexLoopAdapterTests(unittest.TestCase):
         ]
 
     def adapter_environment(
-        self, *, exit_code: str = "0", sleep_seconds: str = "0"
+        self,
+        *,
+        exit_code: str = "0",
+        sleep_seconds: str = "0",
+        stdout: str = "",
+        stderr: str = "",
     ) -> dict[str, str]:
         environment = os.environ.copy()
         environment["FAKE_CODEX_CAPTURE"] = str(self.capture)
         environment["FAKE_CODEX_EXIT"] = exit_code
         environment["FAKE_CODEX_PID"] = str(self.child_pid)
         environment["FAKE_CODEX_SLEEP"] = sleep_seconds
+        environment["FAKE_CODEX_STDOUT"] = stdout
+        environment["FAKE_CODEX_STDERR"] = stderr
         return environment
 
     def run_adapter(
@@ -136,6 +158,8 @@ class CodexLoopAdapterTests(unittest.TestCase):
         *arguments: str,
         exit_code: str = "0",
         sleep_seconds: str = "0",
+        stdout: str = "",
+        stderr: str = "",
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             self.adapter_command(*arguments),
@@ -144,7 +168,10 @@ class CodexLoopAdapterTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=self.adapter_environment(
-                exit_code=exit_code, sleep_seconds=sleep_seconds
+                exit_code=exit_code,
+                sleep_seconds=sleep_seconds,
+                stdout=stdout,
+                stderr=stderr,
             ),
         )
 
@@ -249,6 +276,81 @@ class CodexLoopAdapterTests(unittest.TestCase):
         result = self.run_adapter(exit_code="19")
         self.assertEqual(19, result.returncode)
 
+    def test_pretty_output_renders_text_and_preserves_raw_jsonl(self) -> None:
+        raw = (
+            '{ "type": "item.completed", "item": '
+            '{"type": "agent_message", "text": "可讀事件🙂"} }\n'
+        )
+
+        result = self.run_adapter(
+            "--output-format",
+            "pretty",
+            stdout=raw,
+            stderr="progress line\n",
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("可讀事件🙂", result.stdout)
+        self.assertNotIn('"type": "item.completed"', result.stdout)
+        self.assertIn("progress line", result.stderr)
+        logs = self.base / "locks" / "logs"
+        stdout_logs = list(logs.glob("dispatcher-*.stdout.jsonl"))
+        stderr_logs = list(logs.glob("dispatcher-*.stderr.log"))
+        component_logs = list(logs.glob("dispatcher-*.component.jsonl"))
+        self.assertEqual(1, len(stdout_logs))
+        self.assertEqual(1, len(stderr_logs))
+        self.assertEqual(1, len(component_logs))
+        self.assertEqual(raw.encode(), stdout_logs[0].read_bytes())
+        self.assertEqual(b"progress line\n", stderr_logs[0].read_bytes())
+        self.assertIn(b'"result": "output-ready"', component_logs[0].read_bytes())
+        self.assertIn(str(stdout_logs[0]), result.stdout)
+        self.assertIn(str(stderr_logs[0]), result.stdout)
+        self.assertIn(str(component_logs[0]), result.stdout)
+        self.assertEqual(0o700, logs.stat().st_mode & 0o777)
+        self.assertEqual(0o600, stdout_logs[0].stat().st_mode & 0o777)
+        self.assertEqual(0o600, stderr_logs[0].stat().st_mode & 0o777)
+
+    def test_explicit_jsonl_output_is_byte_for_byte_compatible(self) -> None:
+        raw = '{ "type": "future.event", "value": "值🙂" }\n'
+
+        result = self.run_adapter(
+            "--output-format", "jsonl", stdout=raw
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(raw, result.stdout)
+        self.assertFalse((self.base / "locks" / "logs").exists())
+
+    def test_unsafe_pretty_log_path_falls_back_without_blocking_child(self) -> None:
+        raw = '{"type":"turn.started"}\n'
+        unsafe_lock_dir = self.worktree / "runtime"
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(self.adapter),
+                "dispatcher",
+                "--workdir",
+                str(self.worktree),
+                "--codex-bin",
+                str(self.fake_codex),
+                "--lock-dir",
+                str(unsafe_lock_dir),
+                "--output-format",
+                "pretty",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.adapter_environment(stdout=raw),
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(raw, result.stdout)
+        self.assertIn("reverting to JSONL", result.stderr)
+        self.assertFalse((unsafe_lock_dir / "logs").exists())
+
     def test_wrong_repository_fails_closed(self) -> None:
         other = self.base / "other"
         subprocess.run(
@@ -337,6 +439,18 @@ class CodexLoopAdapterTests(unittest.TestCase):
         self.assertEqual(124, result.returncode)
         self.assertIn('"result": "timeout"', result.stderr)
 
+    def test_pretty_timeout_does_not_block_on_silent_child(self) -> None:
+        result = self.run_adapter(
+            "--output-format",
+            "pretty",
+            "--timeout-seconds",
+            "0.05",
+            sleep_seconds="30",
+        )
+
+        self.assertEqual(124, result.returncode)
+        self.assertIn("timeout", result.stdout.lower())
+
     def test_child_keeps_lock_if_adapter_is_killed(self) -> None:
         process = subprocess.Popen(
             self.adapter_command(),
@@ -387,6 +501,253 @@ class CodexLoopAdapterTests(unittest.TestCase):
         result = self.run_adapter("--dry-run")
         self.assertEqual(2, result.returncode)
         self.assertIn("emmet-loop-dispatcher/SKILL.md", result.stderr)
+
+
+class _BlockingOperatorStream(io.StringIO):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def write(self, value: str) -> int:
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise TimeoutError("operator display remained blocked")
+        return super().write(value)
+
+    def flush(self) -> None:
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise TimeoutError("operator display flush remained blocked")
+        super().flush()
+
+
+class _BlockingRawStream:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def write(self, value: bytes) -> int:
+        self.started.set()
+        if not self.release.wait(timeout=10):
+            raise TimeoutError("raw stream remained blocked")
+        return len(value)
+
+    def flush(self) -> None:
+        if not self.release.wait(timeout=10):
+            raise TimeoutError("raw stream flush remained blocked")
+
+    def close(self) -> None:
+        return None
+
+
+class _FailingRawStream:
+    def write(self, _value: bytes) -> int:
+        raise OSError("raw disk full")
+
+    def flush(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+class RunChildPrettyBackpressureTests(unittest.TestCase):
+    def test_timeout_reaps_child_while_operator_display_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock_descriptor = os.open(
+                root / "dispatcher.lock", os.O_RDWR | os.O_CREAT, 0o600
+            )
+            blocked = _BlockingOperatorStream()
+            renderer = LoopOutput(
+                "pretty",
+                "dispatcher",
+                raw_log_dir=root / "logs",
+                stdout=blocked,
+                stderr=io.StringIO(),
+            )
+            command = [
+                "python3",
+                "-c",
+                (
+                    "import json,time; "
+                    "print(json.dumps({'type':'turn.started'}), flush=True); "
+                    "time.sleep(30)"
+                ),
+            ]
+            try:
+                started_at = time.monotonic()
+                result = run_child(
+                    command,
+                    root,
+                    lock_descriptor,
+                    timeout_seconds=0.5,
+                    output=renderer,
+                )
+                elapsed = time.monotonic() - started_at
+
+                self.assertEqual(EX_TIMEOUT, result)
+                self.assertLess(elapsed, 2.0)
+                self.assertTrue(blocked.started.wait(timeout=1))
+            finally:
+                blocked.release.set()
+                renderer.close()
+                os.close(lock_descriptor)
+
+    def test_blocked_raw_sink_degrades_without_overriding_child_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock_descriptor = os.open(
+                root / "dispatcher.lock", os.O_RDWR | os.O_CREAT, 0o600
+            )
+            renderer = LoopOutput(
+                "pretty",
+                "dispatcher",
+                raw_log_dir=root / "logs",
+                stdout=io.BytesIO(),
+                stderr=io.BytesIO(),
+            )
+            original_raw_stdout = renderer._raw_stdout
+            blocked_raw = _BlockingRawStream()
+            renderer._raw_stdout = blocked_raw  # type: ignore[assignment]
+            try:
+                started_at = time.monotonic()
+                result = run_child(
+                    [
+                        "python3",
+                        "-c",
+                        (
+                            "import json,sys; "
+                            "print(json.dumps({'type':'turn.started'}), flush=True); "
+                            "sys.exit(19)"
+                        ),
+                    ],
+                    root,
+                    lock_descriptor,
+                    timeout_seconds=5,
+                    output=renderer,
+                )
+
+                self.assertEqual(19, result)
+                self.assertLess(time.monotonic() - started_at, 3.5)
+                self.assertTrue(blocked_raw.started.is_set())
+                self.assertFalse(renderer.pretty)
+
+                started_at = time.monotonic()
+                with self.assertRaisesRegex(TimeoutError, "raw stream"):
+                    renderer.close()
+                self.assertLess(time.monotonic() - started_at, 2.0)
+            finally:
+                blocked_raw.release.set()
+                time.sleep(0.05)
+                if original_raw_stdout is not None:
+                    original_raw_stdout.close()
+                for stream in (renderer._raw_stderr, renderer._raw_component):
+                    if stream is not None:
+                        stream.close()
+                os.close(lock_descriptor)
+
+    def test_raw_write_failure_retries_triggering_chunk_as_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock_descriptor = os.open(
+                root / "dispatcher.lock", os.O_RDWR | os.O_CREAT, 0o600
+            )
+            visible_stdout = io.BytesIO()
+            renderer = LoopOutput(
+                "pretty",
+                "dispatcher",
+                raw_log_dir=root / "logs",
+                stdout=visible_stdout,
+                stderr=io.BytesIO(),
+            )
+            original_raw_stdout = renderer._raw_stdout
+            renderer._raw_stdout = _FailingRawStream()  # type: ignore[assignment]
+            try:
+                result = run_child(
+                    [
+                        "python3",
+                        "-c",
+                        (
+                            "import json; "
+                            "print(json.dumps({'type':'turn.started'}), flush=True)"
+                        ),
+                    ],
+                    root,
+                    lock_descriptor,
+                    timeout_seconds=5,
+                    output=renderer,
+                )
+
+                self.assertEqual(0, result)
+                self.assertFalse(renderer.pretty)
+                self.assertEqual(
+                    b'{"type": "turn.started"}\n', visible_stdout.getvalue()
+                )
+            finally:
+                renderer.close()
+                if original_raw_stdout is not None:
+                    original_raw_stdout.close()
+                os.close(lock_descriptor)
+
+    def test_reader_thread_start_failure_terminates_and_reaps_child(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock_descriptor = os.open(
+                root / "dispatcher.lock", os.O_RDWR | os.O_CREAT, 0o600
+            )
+            renderer = LoopOutput(
+                "pretty",
+                "dispatcher",
+                raw_log_dir=root / "logs",
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            )
+            children: list[subprocess.Popen[bytes]] = []
+            original_popen = subprocess.Popen
+            original_start = threading.Thread.start
+            starts = 0
+
+            def capture_child(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+                child = original_popen(*args, **kwargs)
+                children.append(child)
+                return child
+
+            def fail_second_start(thread: threading.Thread) -> None:
+                nonlocal starts
+                starts += 1
+                if starts == 2:
+                    raise RuntimeError("reader thread unavailable")
+                original_start(thread)
+
+            try:
+                with (
+                    mock.patch(
+                        "scripts.codex_loop.subprocess.Popen",
+                        side_effect=capture_child,
+                    ),
+                    mock.patch(
+                        "scripts.codex_loop.threading.Thread.start",
+                        new=fail_second_start,
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "reader thread unavailable"
+                    ):
+                        run_child(
+                            ["python3", "-c", "import time; time.sleep(30)"],
+                            root,
+                            lock_descriptor,
+                            timeout_seconds=30,
+                            output=renderer,
+                        )
+
+                self.assertEqual(1, len(children))
+                self.assertIsNotNone(children[0].poll())
+            finally:
+                renderer.close()
+                os.close(lock_descriptor)
 
 
 class CodexLoopSkillContractTests(unittest.TestCase):

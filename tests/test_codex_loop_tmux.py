@@ -38,6 +38,11 @@ class CodexLoopTmuxTests(unittest.TestCase):
         )
         self.assertEqual(Path("/repo"), rotate.repository_root)
         self.assertEqual(42, rotate.wait_pid)
+        self.assertEqual("pretty", rotate.output_format)
+        self.assertEqual(
+            "jsonl",
+            parser.parse_args(["start", "--output-format", "jsonl"]).output_format,
+        )
         self.assertTrue(
             parser.parse_args(["restart", "--trusted-control"]).trusted_control
         )
@@ -396,6 +401,62 @@ class CodexLoopTmuxTests(unittest.TestCase):
         for command in commands.values():
             self.assertIn("--tmux-title", command)
             self.assertIn("--tmux-bin", command)
+            self.assertIn("--output-format", command)
+            self.assertEqual(
+                "pretty",
+                command[command.index("--output-format") + 1],
+            )
+        self.assertEqual(
+            "pretty",
+            commands["events"][
+                commands["events"].index("--rotation-output-format") + 1
+            ],
+        )
+
+    def test_component_commands_can_restore_raw_jsonl_display(self) -> None:
+        commands = launcher.build_component_commands(
+            Path("/trusted/scripts/codex-loop"),
+            launcher.runner_workdirs(Path("/workspace/emmet-qt-book")),
+            interval_seconds=60,
+            retry_seconds=1800,
+            dispatcher_heartbeat_seconds=1800,
+            output_format="jsonl",
+        )
+
+        for command in commands.values():
+            self.assertEqual(
+                "jsonl",
+                command[command.index("--output-format") + 1],
+            )
+        self.assertEqual(
+            "jsonl",
+            commands["events"][
+                commands["events"].index("--rotation-output-format") + 1
+            ],
+        )
+
+    def test_rotated_start_preserves_output_format(self) -> None:
+        options = launcher.parser().parse_args(
+            [
+                "rotate",
+                "--repository-root",
+                "/repo",
+                "--wait-pid",
+                "42",
+                "--output-format",
+                "jsonl",
+            ]
+        )
+
+        command = launcher.build_rotated_start_command(
+            Path("/trusted/scripts/codex-loop"),
+            options,
+            Path("/repo"),
+        )
+
+        self.assertEqual(
+            "jsonl", command[command.index("--output-format") + 1]
+        )
 
     def test_role_profiles_override_the_shared_profile(self) -> None:
         commands = launcher.build_component_commands(

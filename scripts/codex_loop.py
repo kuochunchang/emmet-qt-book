@@ -18,8 +18,14 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import tomllib
 from typing import Callable, Iterator, Sequence
+
+try:
+    from .codex_loop_output import LoopOutput, resolve_output_format
+except ImportError:  # Direct execution through scripts/codex-loop.
+    from codex_loop_output import LoopOutput, resolve_output_format
 
 
 ROLES = ("dispatcher", "coder", "reviewer", "gate-auditor")
@@ -64,6 +70,7 @@ CONTROL_PATHS = (
     "docs/superpowers/specs/2026-07-13-agent-loop-skills-design.md",
     "scripts/codex-loop",
     "scripts/codex_loop.py",
+    "scripts/codex_loop_output.py",
     "scripts/codex_loop_runtime.py",
     "scripts/codex_loop_tmux.py",
 )
@@ -294,6 +301,50 @@ def default_lock_dir(common_dir: Path) -> Path:
     return runtime_root / f"emmet-qt-book-codex-loop-{digest}"
 
 
+def repository_private_roots(workdir: Path, common_dir: Path) -> tuple[Path, ...]:
+    """Return every linked worktree plus the shared Git directory."""
+
+    roots = {common_dir.expanduser().resolve(), workdir.expanduser().resolve()}
+    listing = _git_output(workdir, "worktree", "list", "--porcelain")
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            roots.add(Path(line.removeprefix("worktree ")).resolve())
+    return tuple(sorted(roots, key=str))
+
+
+def create_loop_output(
+    output_format: str,
+    *,
+    component: str,
+    raw_log_dir: Path,
+    workdir: Path,
+    common_dir: Path,
+) -> LoopOutput:
+    """Create the optional display layer, falling back to JSONL on failure."""
+
+    resolved_format = resolve_output_format(output_format, sys.stdout)
+    if resolved_format == "jsonl":
+        return LoopOutput("jsonl", component=component)
+    try:
+        return LoopOutput(
+            resolved_format,
+            component=component,
+            raw_log_dir=raw_log_dir,
+            forbidden_roots=repository_private_roots(workdir, common_dir),
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        try:
+            print(
+                "codex-loop: pretty output unavailable; reverting to JSONL: "
+                f"{error}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except (OSError, ValueError):
+            pass
+        return LoopOutput("jsonl", component=component)
+
+
 @contextmanager
 def role_lock(lock_dir: Path, role: str) -> Iterator[int]:
     """Hold a non-blocking per-role lock until the child exits."""
@@ -330,14 +381,18 @@ def run_child(
     lock_descriptor: int,
     timeout_seconds: float,
     on_signal: Callable[[], None] | None = None,
+    output: LoopOutput | None = None,
 ) -> int:
     """Run Codex in its own process group while the child also holds the lock."""
 
+    capture = output is not None and output.pretty
     child = subprocess.Popen(
         command,
         cwd=workdir,
         pass_fds=(lock_descriptor,),
         start_new_session=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
     )
     os.ftruncate(lock_descriptor, 0)
     os.pwrite(
@@ -356,40 +411,159 @@ def run_child(
     )
 
     def forward_signal(signum: int, _frame: object) -> None:
-        if on_signal is not None:
-            on_signal()
         try:
-            os.killpg(child.pid, signum)
-        except ProcessLookupError:
-            pass
+            if on_signal is not None:
+                on_signal()
+        finally:
+            try:
+                os.killpg(child.pid, signum)
+            except ProcessLookupError:
+                pass
 
     previous_handlers = {
         signum: signal.signal(signum, forward_signal)
         for signum in (signal.SIGINT, signal.SIGTERM)
     }
+    reader_threads: list[threading.Thread] = []
+    reader_errors: list[BaseException] = []
+    reader_stop = threading.Event()
+
+    def pump(stream: object, feed: Callable[[bytes], None]) -> None:
+        try:
+            descriptor = stream.fileno()  # type: ignore[attr-defined]
+            os.set_blocking(descriptor, False)
+            while not reader_stop.is_set():
+                try:
+                    chunk = os.read(descriptor, 65536)
+                except BlockingIOError:
+                    reader_stop.wait(0.02)
+                    continue
+                if not chunk:
+                    break
+                try:
+                    feed(chunk)
+                except BaseException as error:  # Renderer must not stop draining.
+                    if len(reader_errors) < 3:
+                        reader_errors.append(error)
+                    if output is not None:
+                        output.degrade_to_jsonl()
+                        try:
+                            feed(chunk)
+                        except BaseException as fallback_error:
+                            if len(reader_errors) < 3:
+                                reader_errors.append(fallback_error)
+        except BaseException as error:
+            if len(reader_errors) < 3:
+                reader_errors.append(error)
+        finally:
+            try:
+                stream.close()  # type: ignore[attr-defined]
+            except (OSError, ValueError):
+                pass
+
+    def terminate_child() -> None:
+        if child.poll() is not None:
+            return
+        forward_signal(signal.SIGTERM, None)
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            forward_signal(signal.SIGKILL, None)
+            child.wait()
+
     try:
         try:
-            return_code = child.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            print(
-                json.dumps(
-                    {
-                        "result": "timeout",
-                        "timeout_seconds": timeout_seconds,
-                    }
-                ),
-                file=sys.stderr,
-            )
-            forward_signal(signal.SIGTERM, None)
+            if capture:
+                assert child.stdout is not None
+                assert child.stderr is not None
+                for stream, feed, name in (
+                    (child.stdout, output.feed_stdout, "stdout"),
+                    (child.stderr, output.feed_stderr, "stderr"),
+                ):
+                    thread = threading.Thread(
+                        target=pump,
+                        args=(stream, feed),
+                        name=f"codex-loop-{name}",
+                        daemon=True,
+                    )
+                    thread.start()
+                    reader_threads.append(thread)
             try:
-                child.wait(timeout=10)
+                return_code = child.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
-                forward_signal(signal.SIGKILL, None)
-                child.wait()
-            return EX_TIMEOUT
+                timeout_record = {
+                    "component": "codex",
+                    "result": "timeout",
+                    "timeout_seconds": timeout_seconds,
+                }
+                terminate_child()
+                if output is not None and output.pretty:
+                    try:
+                        output.emit_component(timeout_record)
+                    except Exception as error:
+                        if len(reader_errors) < 3:
+                            reader_errors.append(error)
+                else:
+                    try:
+                        timeout_message = json.dumps(
+                            {
+                                "result": "timeout",
+                                "timeout_seconds": timeout_seconds,
+                            }
+                        )
+                        if output is not None and output.degraded:
+                            output.emit_diagnostic(timeout_message)
+                        else:
+                            print(timeout_message, file=sys.stderr)
+                    except (OSError, TimeoutError, ValueError):
+                        pass
+                return EX_TIMEOUT
+        except BaseException:
+            terminate_child()
+            raise
     finally:
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
+        try:
+            for thread in reader_threads:
+                thread.join(timeout=1)
+            if any(thread.is_alive() for thread in reader_threads):
+                reader_stop.set()
+                for thread in reader_threads:
+                    thread.join(timeout=1)
+            readers_stopped = not any(
+                thread.is_alive() for thread in reader_threads
+            )
+            if not readers_stopped and len(reader_errors) < 3:
+                reader_errors.append(
+                    RuntimeError("pretty renderer drain thread did not stop")
+                )
+            if not readers_stopped and output is not None:
+                output.degrade_to_jsonl(wait_for_raw_lock=False)
+            if readers_stopped:
+                for stream in (child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
+            if capture and output is not None and readers_stopped:
+                try:
+                    output.finish()
+                except Exception as error:
+                    if len(reader_errors) < 3:
+                        reader_errors.append(error)
+                    output.degrade_to_jsonl()
+            if reader_errors:
+                diagnostic = (
+                    "codex-loop: pretty renderer stream error: "
+                    + "; ".join(str(error) for error in reader_errors[:3])
+                )
+                try:
+                    if output is not None:
+                        output.emit_diagnostic(diagnostic)
+                    else:
+                        print(diagnostic, file=sys.stderr, flush=True)
+                except (OSError, TimeoutError, ValueError):
+                    pass
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
 
     if return_code < 0:
         return 128 + abs(return_code)
@@ -436,6 +610,14 @@ def parser() -> argparse.ArgumentParser:
         default=7200.0,
         help="一輪最長秒數；逾時先 TERM、10 秒後仍未退出則 KILL（預設 7200）。",
     )
+    result.add_argument(
+        "--output-format",
+        choices=("auto", "pretty", "jsonl"),
+        default="auto",
+        help=(
+            "operator output；auto 在 TTY 使用 pretty，pipe／redirect 使用 JSONL。"
+        ),
+    )
     return result
 
 
@@ -467,6 +649,33 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if options.lock_dir
         else default_lock_dir(common_dir)
     )
+    output = create_loop_output(
+        options.output_format,
+        component=options.role,
+        raw_log_dir=lock_dir / "logs",
+        workdir=workdir,
+        common_dir=common_dir,
+    )
+    if output.pretty:
+        try:
+            output.emit_component(
+                {
+                    "component": "agent",
+                    "role": options.role,
+                    "result": "output-ready",
+                    "raw_stdout": str(output.raw_stdout_path),
+                    "raw_stderr": str(output.raw_stderr_path),
+                    "raw_component": str(output.raw_component_path),
+                }
+            )
+        except Exception as error:
+            output.degrade_to_jsonl()
+            try:
+                output.emit_diagnostic(
+                    f"codex-loop: raw component log unavailable: {error}"
+                )
+            except Exception:
+                pass
     try:
         with role_lock(lock_dir, options.role) as lock_descriptor:
             return run_child(
@@ -474,6 +683,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 workdir,
                 lock_descriptor,
                 options.timeout_seconds,
+                output=output,
             )
     except BlockingIOError as error:
         print(
@@ -484,9 +694,19 @@ def main(arguments: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EX_TEMPFAIL
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         print(f"codex-loop: 無法啟動或管理 Codex：{error}", file=sys.stderr)
         return 2
+    finally:
+        try:
+            output.close()
+        except Exception as error:
+            try:
+                output.emit_diagnostic(
+                    f"codex-loop: 無法完整關閉 operator output：{error}"
+                )
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
