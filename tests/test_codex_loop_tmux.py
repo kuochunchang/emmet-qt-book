@@ -56,12 +56,17 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "loop_coder",
                 "--reviewer-profile",
                 "loop-reviewer",
+                "--gate-auditor-profile",
+                "loop-gate-auditor",
             ]
         )
         self.assertEqual("loop", profiles.profile)
         self.assertEqual("loop-dispatcher", profiles.dispatcher_profile)
         self.assertEqual("loop_coder", profiles.coder_profile)
         self.assertEqual("loop-reviewer", profiles.reviewer_profile)
+        self.assertEqual(
+            "loop-gate-auditor", profiles.gate_auditor_profile
+        )
         with (
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit),
@@ -77,6 +82,10 @@ class CodexLoopTmuxTests(unittest.TestCase):
             shared.write_text('model = "shared"\n', encoding="utf-8")
             reviewer = home / "loop-reviewer.config.toml"
             reviewer.write_text('model = "reviewer"\n', encoding="utf-8")
+            gate_auditor = home / "loop-gate-auditor.config.toml"
+            gate_auditor.write_text(
+                'model = "gate-auditor"\n', encoding="utf-8"
+            )
 
             with mock.patch.object(launcher, "codex_home", return_value=home):
                 self.assertEqual(
@@ -85,6 +94,10 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 self.assertEqual(
                     "loop-reviewer",
                     launcher.discover_automatic_profile("reviewer"),
+                )
+                self.assertEqual(
+                    "loop-gate-auditor",
+                    launcher.discover_automatic_profile("gate-auditor"),
                 )
 
                 options = launcher.parser().parse_args(
@@ -95,9 +108,13 @@ class CodexLoopTmuxTests(unittest.TestCase):
             self.assertEqual("loop", options.dispatcher_profile)
             self.assertEqual("explicit-coder", options.coder_profile)
             self.assertEqual("loop-reviewer", options.reviewer_profile)
+            self.assertEqual(
+                "loop-gate-auditor", options.gate_auditor_profile
+            )
 
             shared.unlink()
             reviewer.unlink()
+            gate_auditor.unlink()
             with mock.patch.object(launcher, "codex_home", return_value=home):
                 self.assertIsNone(
                     launcher.discover_automatic_profile("coder")
@@ -118,6 +135,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
         self.assertIsNone(options.dispatcher_profile)
         self.assertIsNone(options.coder_profile)
         self.assertIsNone(options.reviewer_profile)
+        self.assertIsNone(options.gate_auditor_profile)
 
     def test_runner_workdirs_are_dedicated_siblings(self) -> None:
         root = Path("/workspace/emmet-qt-book")
@@ -126,6 +144,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "dispatcher": Path("/workspace/emmet-qt-book-dispatcher"),
                 "coder": Path("/workspace/emmet-qt-book-coder"),
                 "reviewer": Path("/workspace/emmet-qt-book-reviewer"),
+                "gate-auditor": Path(
+                    "/workspace/emmet-qt-book-gate-auditor"
+                ),
             },
             launcher.runner_workdirs(root),
         )
@@ -361,7 +382,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
             profile="loop",
         )
         self.assertEqual(
-            ["dispatcher", "coder", "reviewer", "events"],
+            ["dispatcher", "coder", "reviewer", "gate-auditor", "events"],
             list(commands),
         )
         for role in launcher.adapter.ROLES:
@@ -388,6 +409,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "dispatcher": "loop-dispatcher",
                 "coder": None,
                 "reviewer": "loop-reviewer",
+                "gate-auditor": "loop-gate-auditor",
             },
         )
 
@@ -400,11 +422,16 @@ class CodexLoopTmuxTests(unittest.TestCase):
             ["--profile", "loop-reviewer"],
             commands["reviewer"][-2:],
         )
+        self.assertEqual(
+            ["--profile", "loop-gate-auditor"],
+            commands["gate-auditor"][-2:],
+        )
         self.assertNotIn("--profile", commands["events"])
         for role, selected in (
             ("dispatcher", "loop-dispatcher"),
             ("coder", "loop"),
             ("reviewer", "loop-reviewer"),
+            ("gate-auditor", "loop-gate-auditor"),
         ):
             self.assertIn(f"--rotation-{role}-profile", commands["events"])
             self.assertIn(selected, commands["events"])
@@ -425,6 +452,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
                         "dispatcher": "valid",
                         "coder": "valid",
                         "reviewer": None,
+                        "gate-auditor": None,
                     }
                 )
                 with self.assertRaisesRegex(
@@ -435,6 +463,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
                             "dispatcher": "missing",
                             "coder": None,
                             "reviewer": None,
+                            "gate-auditor": None,
                         }
                     )
 
@@ -450,6 +479,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
                             "dispatcher": "broken",
                             "coder": None,
                             "reviewer": None,
+                            "gate-auditor": None,
                         }
                     )
 
@@ -460,13 +490,13 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 Path("/trusted/scripts/codex-loop"), runners, "loop"
             )
 
-        self.assertEqual(4, run.call_count)
-        for call in run.call_args_list[:3]:
+        self.assertEqual(5, run.call_count)
+        for call in run.call_args_list[:4]:
             command = call.args[0]
             self.assertIn("--profile", command)
             self.assertIn("loop", command)
             self.assertEqual("--dry-run", command[-1])
-        self.assertNotIn("--profile", run.call_args_list[3].args[0])
+        self.assertNotIn("--profile", run.call_args_list[4].args[0])
 
     def test_preflight_uses_each_roles_resolved_profile(self) -> None:
         runners = launcher.runner_workdirs(Path("/workspace/emmet-qt-book"))
@@ -478,12 +508,18 @@ class CodexLoopTmuxTests(unittest.TestCase):
                     "dispatcher": "loop-dispatcher",
                     "coder": "loop-coder",
                     "reviewer": "loop-reviewer",
+                    "gate-auditor": "loop-gate-auditor",
                 },
             )
 
         for call, selected in zip(
-            run.call_args_list[:3],
-            ("loop-dispatcher", "loop-coder", "loop-reviewer"),
+            run.call_args_list[:4],
+            (
+                "loop-dispatcher",
+                "loop-coder",
+                "loop-reviewer",
+                "loop-gate-auditor",
+            ),
             strict=True,
         ):
             self.assertEqual(
@@ -557,6 +593,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
             "dispatcher": {"parent_pid": 101},
             "events": {"pid": 100},
             "coder": {"parent_pid": 102},
+            "gate-auditor": {"parent_pid": 103},
         }
         with (
             mock.patch.object(
@@ -583,6 +620,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 mock.call(100, signal.SIGTERM),
                 mock.call(101, signal.SIGTERM),
                 mock.call(102, signal.SIGTERM),
+                mock.call(103, signal.SIGTERM),
             ],
             kill.call_args_list,
         )
@@ -616,6 +654,8 @@ class CodexLoopTmuxTests(unittest.TestCase):
                     "loop-dispatcher",
                     "--reviewer-profile",
                     "loop-reviewer",
+                    "--gate-auditor-profile",
+                    "loop-gate-auditor",
                 ]
             )
             order: list[str] = []
@@ -709,12 +749,14 @@ class CodexLoopTmuxTests(unittest.TestCase):
             self.assertIn("loop-dispatcher", command)
             self.assertIn("--reviewer-profile", command)
             self.assertIn("loop-reviewer", command)
+            self.assertIn("--gate-auditor-profile", command)
+            self.assertIn("loop-gate-auditor", command)
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual("completed", state["state"])
             self.assertEqual("a" * 40, state["target_main"])
 
-    def test_tmux_layout_maps_roles_to_four_quadrants(self) -> None:
-        pane_ids = iter(("%2", "%3", "%4"))
+    def test_tmux_layout_maps_roles_to_five_deterministic_panes(self) -> None:
+        pane_ids = iter(("%2", "%3", "%4", "%5"))
         common_dir = Path("/repo/.git")
         runners = launcher.runner_workdirs(Path("/workspace/emmet-qt-book"))
 
@@ -743,7 +785,8 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "dispatcher": "%1",
                 "coder": "%2",
                 "reviewer": "%3",
-                "events": "%4",
+                "gate-auditor": "%4",
+                "events": "%5",
             },
             panes,
         )
@@ -761,6 +804,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
             [
                 ("%1", True, str(runners["coder"])),
                 ("%1", False, str(runners["reviewer"])),
+                ("%3", False, str(runners["gate-auditor"])),
                 ("%2", False, str(runners["dispatcher"])),
             ],
             splits,
@@ -775,7 +819,8 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "%1": "dispatcher (啟動中)",
                 "%2": "coder (啟動中)",
                 "%3": "reviewer (啟動中)",
-                "%4": "events (等待 agents)",
+                "%4": "gate-auditor (啟動中)",
+                "%5": "events (等待 agents)",
             },
             titles,
         )
@@ -839,6 +884,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
             "dispatcher": "loop-dispatcher",
             "coder": "loop-coder",
             "reviewer": "loop-reviewer",
+            "gate-auditor": "loop-gate-auditor",
         }
         with mock.patch.object(
             launcher, "tmux_command", side_effect=fake_tmux
@@ -854,6 +900,97 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 launcher.codex_role_configuration(profiles),
                 launcher.session_codex_configuration("tmux", "test-loop"),
             )
+
+    def test_legacy_three_role_session_metadata_is_read_safely(self) -> None:
+        legacy_profiles = {
+            "dispatcher": "loop-dispatcher",
+            "coder": "loop-coder",
+            "reviewer": "loop-reviewer",
+        }
+        legacy_configuration = {
+            role: {"source": "profile", "profile": profile}
+            for role, profile in legacy_profiles.items()
+        }
+
+        def fake_tmux(
+            _tmux_bin: str, *arguments: str, check: bool = True
+        ) -> subprocess.CompletedProcess[str]:
+            del check
+            option = arguments[-1]
+            if option == launcher.SESSION_PROFILES:
+                payload = legacy_profiles
+            elif option == launcher.SESSION_CODEX_CONFIGURATION:
+                payload = {"schema": 1, "roles": legacy_configuration}
+            else:
+                raise AssertionError(arguments)
+            return self.completed(json.dumps(payload) + "\n")
+
+        with mock.patch.object(
+            launcher, "tmux_command", side_effect=fake_tmux
+        ):
+            profiles = launcher.session_role_profiles("tmux", "test-loop")
+            configuration = launcher.session_codex_configuration(
+                "tmux", "test-loop"
+            )
+
+        self.assertEqual(
+            {
+                **legacy_profiles,
+                "gate-auditor": None,
+            },
+            profiles,
+        )
+        self.assertEqual(
+            {"source": "inherited"},
+            configuration["gate-auditor"],
+        )
+
+    def test_status_marks_three_role_session_as_legacy(self) -> None:
+        common_dir = Path("/repo/.git")
+        profiles = {
+            "dispatcher": "loop-dispatcher",
+            "coder": "loop-coder",
+            "reviewer": "loop-reviewer",
+            "gate-auditor": None,
+        }
+        configuration = {
+            role: {"source": "profile", "profile": profile}
+            for role, profile in profiles.items()
+            if profile is not None
+        }
+        configuration["gate-auditor"] = {"source": "inherited"}
+        with (
+            mock.patch.object(launcher, "session_exists", return_value=True),
+            mock.patch.object(
+                launcher, "session_marker", return_value=str(common_dir)
+            ),
+            mock.patch.object(
+                launcher, "session_role_profiles", return_value=profiles
+            ),
+            mock.patch.object(
+                launcher,
+                "session_codex_configuration",
+                return_value=configuration,
+            ),
+            mock.patch.object(launcher, "active_components", return_value={}),
+            mock.patch.object(launcher, "runner_git_state", return_value={}),
+            mock.patch.object(launcher, "emit") as emit,
+        ):
+            launcher.status_report(
+                "tmux",
+                "test-loop",
+                common_dir,
+                launcher.runner_workdirs(Path("/repo")),
+                Path("/runtime"),
+                None,
+            )
+
+        fields = emit.call_args.kwargs
+        self.assertEqual("legacy-session", fields["codex_profile_source"])
+        self.assertEqual(
+            {"source": "inherited"},
+            fields["codex_role_configuration"]["gate-auditor"],
+        )
 
     def test_codex_configuration_distinguishes_defaults_profiles_and_legacy(
         self,
@@ -871,6 +1008,7 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "dispatcher": None,
                 "coder": "loop-coder",
                 "reviewer": None,
+                "gate-auditor": None,
             }
         )
 
@@ -1014,7 +1152,8 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "dispatcher": "%1",
                 "coder": "%2",
                 "reviewer": "%3",
-                "events": "%4",
+                "gate-auditor": "%4",
+                "events": "%5",
             }
             options = launcher.parser().parse_args(["start", "--no-attach"])
 
@@ -1082,8 +1221,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 "send:%1",
                 "send:%2",
                 "send:%3",
-                "agents-ready",
                 "send:%4",
+                "agents-ready",
+                "send:%5",
                 "events-ready",
             ],
             order,

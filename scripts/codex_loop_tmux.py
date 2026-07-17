@@ -35,6 +35,7 @@ SESSION_MARKER = "@emmet_loop_common_dir"
 SESSION_PROFILES = "@emmet_loop_codex_profiles"
 SESSION_CODEX_CONFIGURATION = "@emmet_loop_codex_configuration"
 COMPONENTS = ("events", *adapter.ROLES)
+LEGACY_ROLES = frozenset(("dispatcher", "coder", "reviewer"))
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -74,6 +75,21 @@ def validate_profile_name(value: str) -> str:
     return value
 
 
+def role_profile_attribute(role: str) -> str:
+    """Return the argparse attribute for one possibly hyphenated role."""
+
+    return f"{role.replace('-', '_')}_profile"
+
+
+def is_legacy_role_set(roles: set[str]) -> bool:
+    """Recognize the only pre-gate-auditor launcher generation."""
+
+    return (
+        roles == LEGACY_ROLES
+        and set(adapter.ROLES) == LEGACY_ROLES | {"gate-auditor"}
+    )
+
+
 def resolve_role_profiles(
     profile: str | None,
     role_profiles: Mapping[str, str | None] | None = None,
@@ -105,7 +121,7 @@ def apply_automatic_role_profiles(options: argparse.Namespace) -> None:
     if options.profile is not None:
         return
     for role in adapter.ROLES:
-        attribute = f"{role}_profile"
+        attribute = role_profile_attribute(role)
         if getattr(options, attribute) is None:
             setattr(options, attribute, discover_automatic_profile(role))
 
@@ -372,56 +388,37 @@ def build_component_commands(
     repository_root: Path = REPOSITORY_ROOT,
 ) -> dict[str, list[str]]:
     commands = {
-        "dispatcher": [
+        role: [
             str(adapter_path),
             "agent",
-            "dispatcher",
+            role,
             "--workdir",
-            str(runners["dispatcher"]),
+            str(runners[role]),
             "--tmux-title",
             "--tmux-bin",
             tmux_bin,
-        ],
-        "coder": [
-            str(adapter_path),
-            "agent",
-            "coder",
-            "--workdir",
-            str(runners["coder"]),
-            "--tmux-title",
-            "--tmux-bin",
-            tmux_bin,
-        ],
-        "reviewer": [
-            str(adapter_path),
-            "agent",
-            "reviewer",
-            "--workdir",
-            str(runners["reviewer"]),
-            "--tmux-title",
-            "--tmux-bin",
-            tmux_bin,
-        ],
-        "events": [
-            str(adapter_path),
-            "events",
-            "--workdir",
-            str(runners["dispatcher"]),
-            "--tmux-title",
-            "--tmux-bin",
-            tmux_bin,
-            "--tmux-session",
-            session,
-            "--repository-root",
-            str(repository_root),
-            "--interval-seconds",
-            str(interval_seconds),
-            "--retry-seconds",
-            str(retry_seconds),
-            "--dispatcher-heartbeat-seconds",
-            str(dispatcher_heartbeat_seconds),
-        ],
+        ]
+        for role in adapter.ROLES
     }
+    commands["events"] = [
+        str(adapter_path),
+        "events",
+        "--workdir",
+        str(runners["dispatcher"]),
+        "--tmux-title",
+        "--tmux-bin",
+        tmux_bin,
+        "--tmux-session",
+        session,
+        "--repository-root",
+        str(repository_root),
+        "--interval-seconds",
+        str(interval_seconds),
+        "--retry-seconds",
+        str(retry_seconds),
+        "--dispatcher-heartbeat-seconds",
+        str(dispatcher_heartbeat_seconds),
+    ]
     resolved_profiles = resolve_role_profiles(profile, role_profiles)
     for role, selected_profile in resolved_profiles.items():
         if selected_profile:
@@ -757,11 +754,16 @@ def session_role_profiles(
         value = json.loads(raw)
     except json.JSONDecodeError as error:
         raise LauncherError("tmux session 的 Codex profile metadata 無效") from error
-    if not isinstance(value, dict) or set(value) != set(adapter.ROLES):
+    if not isinstance(value, dict):
+        raise LauncherError("tmux session 的 Codex profile metadata 不完整")
+    stored_roles = set(value)
+    if stored_roles != set(adapter.ROLES) and not is_legacy_role_set(
+        stored_roles
+    ):
         raise LauncherError("tmux session 的 Codex profile metadata 不完整")
     result: dict[str, str | None] = {}
     for role in adapter.ROLES:
-        selected = value[role]
+        selected = value.get(role)
         if selected is not None and not isinstance(selected, str):
             raise LauncherError("tmux session 的 Codex profile metadata 類型錯誤")
         result[role] = selected
@@ -792,11 +794,16 @@ def session_codex_configuration(
     if not isinstance(value, dict) or value.get("schema") != 1:
         raise LauncherError("tmux session 的 Codex execution metadata 不完整")
     roles = value.get("roles")
-    if not isinstance(roles, dict) or set(roles) != set(adapter.ROLES):
+    if not isinstance(roles, dict):
+        raise LauncherError("tmux session 的 Codex execution metadata 不完整")
+    stored_roles = set(roles)
+    if stored_roles != set(adapter.ROLES) and not is_legacy_role_set(
+        stored_roles
+    ):
         raise LauncherError("tmux session 的 Codex execution metadata 不完整")
     result: dict[str, dict[str, object]] = {}
     for role in adapter.ROLES:
-        config = roles[role]
+        config = roles.get(role, {"source": "inherited"})
         if not isinstance(config, dict) or config.get("source") not in {
             "repo-default",
             "profile",
@@ -914,6 +921,19 @@ def create_tmux_session(
         "-c",
         str(runners["reviewer"]),
     ).stdout.strip()
+    gate_auditor = tmux_command(
+        tmux_bin,
+        "split-window",
+        "-d",
+        "-v",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        reviewer,
+        "-c",
+        str(runners["gate-auditor"]),
+    ).stdout.strip()
     events = tmux_command(
         tmux_bin,
         "split-window",
@@ -931,6 +951,7 @@ def create_tmux_session(
         "dispatcher": dispatcher,
         "coder": coder,
         "reviewer": reviewer,
+        "gate-auditor": gate_auditor,
         "events": events,
     }
     tmux_command(
@@ -961,6 +982,7 @@ def create_tmux_session(
         "dispatcher": "dispatcher (啟動中)",
         "coder": "coder (啟動中)",
         "reviewer": "reviewer (啟動中)",
+        "gate-auditor": "gate-auditor (啟動中)",
         "events": "events (等待 agents)",
     }
     for role, pane in panes.items():
@@ -1158,6 +1180,11 @@ def status_report(
         stored_configuration = session_codex_configuration(tmux_bin, session)
         if stored_configuration is not None:
             configuration = stored_configuration
+            if any(
+                config.get("source") == "inherited"
+                for config in configuration.values()
+            ):
+                profile_source = "legacy-session"
         else:
             configuration = codex_role_configuration(
                 profiles, legacy_inherited=True
@@ -1226,10 +1253,11 @@ def dry_run_plan(
         ),
         control_bootstrap=action in ("start", "restart"),
         panes={
-            "top-left": "dispatcher",
-            "top-right": "coder",
-            "bottom-left": "reviewer",
-            "bottom-right": "events",
+            "left-top": "dispatcher",
+            "left-middle": "reviewer",
+            "left-bottom": "gate-auditor",
+            "right-top": "coder",
+            "right-bottom": "events",
         },
         runners={role: str(path) for role, path in runners.items()},
         commands={
@@ -1360,7 +1388,7 @@ def build_rotated_start_command(
     if options.profile:
         command.extend(["--profile", options.profile])
     for role in adapter.ROLES:
-        selected_profile = getattr(options, f"{role}_profile")
+        selected_profile = getattr(options, role_profile_attribute(role))
         if selected_profile:
             command.extend([f"--{role}-profile", selected_profile])
     return command
@@ -1455,7 +1483,7 @@ def launch(options: argparse.Namespace) -> int:
     profiles = resolve_role_profiles(
         options.profile,
         {
-            role: getattr(options, f"{role}_profile")
+            role: getattr(options, role_profile_attribute(role))
             for role in adapter.ROLES
         },
     )
@@ -1664,7 +1692,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         description=(
             "安全管理 agent loop，更新 trusted runners，"
-            "並以 2×2 tmux 啟動。"
+            "並以五 pane tmux 啟動。"
         )
     )
     result.add_argument(
@@ -1692,13 +1720,14 @@ def parser() -> argparse.ArgumentParser:
         "--profile",
         type=validate_profile_name,
         help=(
-            "三個 Codex 角色共同使用的預設 profile；"
+            "四個 Codex 角色共同使用的預設 profile；"
             "role-specific profile 可覆寫，未指定則使用 repo 角色預設。"
         ),
     )
     for role in adapter.ROLES:
         result.add_argument(
             f"--{role}-profile",
+            dest=role_profile_attribute(role),
             type=validate_profile_name,
             help=(
                 f"{role} 專用的 Codex profile；覆寫共用 --profile。"

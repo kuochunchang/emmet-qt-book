@@ -22,7 +22,7 @@ import tomllib
 from typing import Callable, Iterator, Sequence
 
 
-ROLES = ("dispatcher", "coder", "reviewer")
+ROLES = ("dispatcher", "coder", "reviewer", "gate-auditor")
 PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 ROLE_CODEX_DEFAULTS: dict[str, dict[str, str]] = {
     "dispatcher": {
@@ -36,6 +36,11 @@ ROLE_CODEX_DEFAULTS: dict[str, dict[str, str]] = {
         "model_verbosity": "low",
     },
     "reviewer": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "xhigh",
+        "model_verbosity": "low",
+    },
+    "gate-auditor": {
         "model": "gpt-5.6-sol",
         "model_reasoning_effort": "xhigh",
         "model_verbosity": "low",
@@ -70,6 +75,14 @@ def default_workdir(role: str, repository_root: Path = REPOSITORY_ROOT) -> Path:
     if role == "dispatcher":
         return repository_root
     return repository_root.parent / f"{repository_root.name}-{role}"
+
+
+def role_option_key(role: str) -> str:
+    """Return the argparse attribute fragment for one public role name."""
+
+    if role not in ROLES:
+        raise ValueError(f"未知 role：{role}")
+    return role.replace("-", "_")
 
 
 def _git_output(workdir: Path, *arguments: str) -> str:

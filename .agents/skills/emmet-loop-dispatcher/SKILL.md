@@ -68,11 +68,18 @@ description: "Execute exactly one idempotent dispatcher iteration for the emmet-
    - 若 approved 的 `Reviewed-Head` 與目前 `headRefOid` 不同，機械性撤銷 stale approval，
      先留含 reviewed／current SHA 的穩定 reconciliation marker，再以期望的完整 label
      set 轉回 `loop:needs-review` 並重查；不要自行做品質裁決或在同輪處理第二件事。
-2. 在派工前判斷 active gate 退出條件。證據已齊就彙整完成 Issue／PR／merge SHA，在
-   Meta Issue #1 留下署名通知與精確 marker
-   `<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->`，然後結束；先搜尋
-   相同 marker，存在就不重複留言。Marker 只代表目前 `main` 的退出 checkpoint，讓
-   event manager 在無 WIP 時進入 `awaiting-user`；核准 transition 前不得派下一 gate。
+2. 在派工前判斷 active gate 退出條件，也核對目前 gate／main 的最新 Dispatcher
+   checkpoint 是否已有綁定該 comment ID 的有效 Gate Auditor audit：
+   - `not-ready` 只 supersede 它綁定的舊 checkpoint；可依其明確缺口恢復或派目前 active-gate 工作。
+     `unknown` 不授權猜測，`exit-ready` 只等待人類。
+   - 缺口解決且證據重新齊全時，在 Meta Issue #1 留下署名通知與精確 marker
+     `<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->`。即使 main SHA 與
+     marker 文字未變，也必須建立新的 checkpoint comment 取得新 comment ID；舊 audit
+     只保留歷史，不綁定新 checkpoint，然後結束。
+   - 沒有 superseding `not-ready` audit 時維持正常 duplicate suppression：先搜尋相同
+     marker，存在就不重複留言。新 checkpoint 只代表目前 `main` 的退出 checkpoint，
+     必須再由 Gate Auditor 稽核；只有 matching `exit-ready` 才進入 `awaiting-user`，
+     核准 transition 前不得派下一 gate。
 3. 若有 unblocked `loop:approved` PR，執行合併前檢查：
    - 最新 Reviewer 裁決留言含目前完整 `Reviewed-Head` SHA，且 `Reviewed-Base` 等於
      最新 `origin/main`；任一 SHA 過期都轉回 `loop:needs-review`；

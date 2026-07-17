@@ -47,6 +47,10 @@ from scripts.codex_loop_runtime import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def meta_body(gate: str = "W1-G2") -> str:
+    return f"## 目前寫作狀態\n\n- Active gate：`{gate}`（已生效）"
+
+
 def loop_object(
     kind: str, number: int, *labels: str
 ) -> dict[str, object]:
@@ -68,11 +72,81 @@ def loop_object(
     return item
 
 
+def gate_checkpoint(
+    main_sha: str,
+    *,
+    gate: str = "W1-G2",
+    checkpoint_id: int = 101,
+) -> dict[str, object]:
+    return {
+        "gate": gate,
+        "main_sha": main_sha,
+        "checkpoint_id": checkpoint_id,
+    }
+
+
+def audit_verdict(
+    main_sha: str,
+    verdict: str,
+    *,
+    gate: str = "W1-G2",
+    checkpoint_id: int = 101,
+    comment_id: int = 102,
+) -> dict[str, object]:
+    return {
+        "gate": gate,
+        "main_sha": main_sha,
+        "checkpoint_id": checkpoint_id,
+        "verdict": verdict,
+        "comment_id": comment_id,
+    }
+
+
+def gate_audit_report_body(
+    main_sha: str,
+    verdict: str,
+    *,
+    gate: str = "W1-G2",
+    checkpoint_id: int = 101,
+    extra_body: str = "",
+) -> str:
+    exit_criteria = {
+        "not-ready": "fail",
+        "unknown": "unknown",
+        "exit-ready": "pass",
+    }[verdict]
+    human_decision = "no" if verdict == "not-ready" else "yes"
+    extra = f"\n{extra_body.rstrip()}\n" if extra_body else "\n"
+    return (
+        "<!-- emmet-loop:gate-auditor:audit:v1:"
+        f"gate={gate}:main={main_sha}:checkpoint={checkpoint_id}:"
+        f"verdict={verdict} -->\n\n"
+        "skill: $emmet-loop-gate-auditor\n"
+        f"verdict: {verdict}\n"
+        f"exit_criteria: {exit_criteria}\n"
+        "governance_consistency: consistent\n"
+        "active_gate_transitioned: no\n"
+        f"audited_gate: {gate}\n"
+        f"observed_active_gate: {gate}\n"
+        "successor_gate: unknown\n"
+        f"main_sha: {main_sha}\n"
+        "audit_time: 2026-07-17T00:00:00+08:00\n"
+        f"human_decision_required: {human_decision}\n"
+        "local_cache_refresh: git-fetch\n"
+        "audit_mutations: none\n"
+        "publication_mutation: meta-comment-only\n"
+        "mutations: meta-comment-only\n"
+        f"{extra}\n— Gate Auditor"
+    )
+
+
 def snapshot(
     *,
     paused: bool = False,
     main_sha: str | None = None,
+    active_gate: str = "W1-G2",
     gate_exit: dict[str, object] | None = None,
+    gate_audit: dict[str, object] | None = None,
     issues: list[dict[str, object]] | None = None,
     pull_requests: list[dict[str, object]] | None = None,
     snapshot_incomplete: list[str] | None = None,
@@ -80,11 +154,46 @@ def snapshot(
     return {
         "paused": paused,
         "main_sha": main_sha,
+        "active_gate": active_gate,
         "gate_exit": gate_exit,
+        "gate_audit": gate_audit,
         "meta_comments_truncated": False,
         "snapshot_incomplete": snapshot_incomplete or [],
         "issues": issues or [],
         "pull_requests": pull_requests or [],
+    }
+
+
+def graphql_payload(
+    main_sha: str,
+    comments: list[dict[str, object]],
+    *,
+    active_gate: str = "W1-G2",
+) -> dict[str, object]:
+    return {
+        "data": {
+            "repository": {
+                "defaultBranchRef": {
+                    "name": "main",
+                    "target": {"oid": main_sha},
+                },
+                "meta": {
+                    "body": meta_body(active_gate),
+                    "labels": {
+                        "nodes": [],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "comments": {
+                        "nodes": comments,
+                        "pageInfo": {"hasPreviousPage": False},
+                    },
+                },
+            },
+            "loopObjects": {
+                "nodes": [],
+                "pageInfo": {"hasNextPage": False},
+            },
+        }
     }
 
 
@@ -107,6 +216,10 @@ class PaneTitleTests(unittest.TestCase):
         self.assertEqual(
             "補查狀態中",
             agent_event_pane_status({"reason": "snapshot-incomplete"}),
+        )
+        self.assertEqual(
+            "Gate 稽核中",
+            agent_event_pane_status({"reason": "gate-audit-requested"}),
         )
 
     def test_operator_title_prioritizes_running_and_blocking_state(self) -> None:
@@ -296,6 +409,22 @@ class EventRoutingTests(unittest.TestCase):
     def test_empty_loop_wakes_dispatcher(self) -> None:
         self.assert_route(snapshot(), "dispatcher", "reconcile-or-dispatch")
 
+    def test_hyphenated_gate_auditor_profile_uses_safe_argparse_dest(
+        self,
+    ) -> None:
+        options = runtime_parser().parse_args(
+            [
+                "events",
+                "--rotation-gate-auditor-profile",
+                "loop-gate-auditor",
+            ]
+        )
+
+        self.assertEqual(
+            "loop-gate-auditor",
+            options.rotation_gate_auditor_profile,
+        )
+
     def test_graphql_partial_response_errors_fail_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "partial response errors"):
             normalize_snapshot(
@@ -371,19 +500,63 @@ class EventRoutingTests(unittest.TestCase):
             )
         )
 
-    def test_current_main_gate_exit_quiesces_empty_loop(self) -> None:
+    def test_current_main_gate_exit_wakes_gate_auditor(self) -> None:
         main_sha = "a" * 40
         state = snapshot(
             main_sha=main_sha,
-            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+            gate_exit=gate_checkpoint(main_sha),
+        )
+
+        self.assert_route(state, "gate-auditor", "gate-audit-requested")
+
+    def test_matching_exit_ready_audit_quiesces_empty_loop(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+            gate_audit=audit_verdict(main_sha, "exit-ready"),
         )
 
         self.assertEqual([], classify_snapshot(state))
 
+    def test_matching_not_ready_audit_returns_to_dispatcher(self) -> None:
+        main_sha = "a" * 40
+        self.assert_route(
+            snapshot(
+                main_sha=main_sha,
+                gate_exit=gate_checkpoint(main_sha),
+                gate_audit=audit_verdict(main_sha, "not-ready"),
+            ),
+            "dispatcher",
+            "gate-audit-not-ready",
+        )
+
+    def test_matching_unknown_audit_stops_role_wakes(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+            gate_audit=audit_verdict(main_sha, "unknown"),
+        )
+
+        self.assertEqual([], classify_snapshot(state))
+
+    def test_mismatched_audit_does_not_satisfy_checkpoint(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha, checkpoint_id=202),
+            gate_audit=audit_verdict(
+                main_sha, "exit-ready", checkpoint_id=101
+            ),
+        )
+
+        self.assert_route(state, "gate-auditor", "gate-audit-requested")
+
     def test_stale_gate_exit_does_not_quiesce_empty_loop(self) -> None:
         state = snapshot(
             main_sha="b" * 40,
-            gate_exit={"gate": "W1-G2", "main_sha": "a" * 40},
+            gate_exit=gate_checkpoint("a" * 40),
         )
 
         self.assert_route(state, "dispatcher", "reconcile-or-dispatch")
@@ -392,7 +565,7 @@ class EventRoutingTests(unittest.TestCase):
         main_sha = "a" * 40
         state = snapshot(
             main_sha=main_sha,
-            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+            gate_exit=gate_checkpoint(main_sha),
             issues=[loop_object("issue", 3, "loop:queued")],
         )
 
@@ -442,7 +615,7 @@ class EventRoutingTests(unittest.TestCase):
     def test_pause_sends_control_event_to_every_agent(self) -> None:
         decisions = classify_snapshot(snapshot(paused=True))
         self.assertEqual(
-            ["dispatcher", "coder", "reviewer"],
+            ["dispatcher", "coder", "reviewer", "gate-auditor"],
             [item["role"] for item in decisions],
         )
         self.assertTrue(all(item["action"] == "paused" for item in decisions))
@@ -457,6 +630,7 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": main_sha},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [{"name": "loop:paused"}],
                             "pageInfo": {"hasNextPage": False},
@@ -467,8 +641,12 @@ class EventRoutingTests(unittest.TestCase):
                                     "body": (
                                         "<!-- emmet-loop:dispatcher:gate-exit:"
                                         f"W1-G2:main={main_sha} -->"
+                                        "\n\n— Dispatcher"
                                     ),
                                     "createdAt": "2026-07-15T00:00:00Z",
+                                    "fullDatabaseId": "4998095350",
+                                    "isMinimized": False,
+                                    "lastEditedAt": None,
                                     "url": "https://example.test/comment",
                                     "viewerDidAuthor": True,
                                 }
@@ -506,8 +684,486 @@ class EventRoutingTests(unittest.TestCase):
         self.assertTrue(normalized["paused"])
         self.assertEqual(main_sha, normalized["main_sha"])
         self.assertEqual("W1-G2", normalized["gate_exit"]["gate"])
+        self.assertEqual(
+            4998095350, normalized["gate_exit"]["checkpoint_id"]
+        )
+        self.assertIsNone(normalized["gate_audit"])
         self.assertTrue(normalized["meta_comments_truncated"])
         self.assertEqual([3], [item["number"] for item in normalized["issues"]])
+
+    def test_normalization_binds_later_trusted_audit_to_exact_checkpoint(
+        self,
+    ) -> None:
+        main_sha = "a" * 40
+        checkpoint_marker = (
+            "<!-- emmet-loop:dispatcher:gate-exit:"
+            f"W1-G2:main={main_sha} -->\n\n— Dispatcher"
+        )
+        audit_marker = gate_audit_report_body(
+            main_sha, "exit-ready", checkpoint_id=4998095350
+        )
+        normalized = normalize_snapshot(
+            graphql_payload(
+                main_sha,
+                [
+                    {
+                        "body": checkpoint_marker,
+                        "createdAt": "2026-07-15T00:00:00Z",
+                        "fullDatabaseId": "4998095350",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "url": "https://example.test/checkpoint",
+                        "viewerDidAuthor": True,
+                    },
+                    {
+                        "body": audit_marker,
+                        "createdAt": "2026-07-15T00:01:00Z",
+                        "fullDatabaseId": "4998095351",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "url": "https://example.test/audit",
+                        "viewerDidAuthor": True,
+                    },
+                ],
+            )
+        )
+
+        self.assertEqual(
+            4998095350, normalized["gate_exit"]["checkpoint_id"]
+        )
+        self.assertEqual("exit-ready", normalized["gate_audit"]["verdict"])
+        self.assertEqual(4998095351, normalized["gate_audit"]["comment_id"])
+        self.assertEqual([], classify_snapshot(normalized))
+
+    def test_audit_checkpoint_quote_does_not_become_a_new_checkpoint(
+        self,
+    ) -> None:
+        main_sha = "a" * 40
+        raw_checkpoint = (
+            "<!-- emmet-loop:dispatcher:gate-exit:"
+            f"W1-G2:main={main_sha} -->"
+        )
+        checkpoint = f"{raw_checkpoint}\n\n— Dispatcher"
+        audit = gate_audit_report_body(
+            main_sha,
+            "exit-ready",
+            checkpoint_id=4998095350,
+            extra_body=f"Checkpoint evidence: {raw_checkpoint}",
+        )
+        normalized = normalize_snapshot(
+            graphql_payload(
+                main_sha,
+                [
+                    {
+                        "body": checkpoint,
+                        "fullDatabaseId": "4998095350",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                    {
+                        "body": audit,
+                        "fullDatabaseId": "4998095351",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                ],
+            )
+        )
+
+        self.assertEqual(
+            4998095350, normalized["gate_exit"]["checkpoint_id"]
+        )
+        self.assertEqual("exit-ready", normalized["gate_audit"]["verdict"])
+        self.assertEqual([], normalized["snapshot_incomplete"])
+
+    def test_audit_marker_must_be_first_line_signed_and_pristine(self) -> None:
+        main_sha = "a" * 40
+        checkpoint = (
+            "<!-- emmet-loop:dispatcher:gate-exit:"
+            f"W1-G2:main={main_sha} -->\n\n— Dispatcher"
+        )
+        marker = (
+            "<!-- emmet-loop:gate-auditor:audit:v1:"
+            f"gate=W1-G2:main={main_sha}:checkpoint=101:"
+            "verdict=exit-ready -->"
+        )
+        base_checkpoint = {
+            "body": checkpoint,
+            "fullDatabaseId": "101",
+            "isMinimized": False,
+            "lastEditedAt": None,
+            "viewerDidAuthor": True,
+        }
+        invalid_audits = (
+            {
+                "body": marker,
+                "fullDatabaseId": "102",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": None,
+            },
+            {
+                "body": f"Quoted evidence:\n{marker}\n\n— Gate Auditor",
+                "fullDatabaseId": "103",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": f"{marker}\n\n— Gate Auditor",
+                "fullDatabaseId": "104",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready"),
+                "fullDatabaseId": "105",
+                "isMinimized": False,
+                "lastEditedAt": "2026-07-17T00:00:00Z",
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready"),
+                "fullDatabaseId": "106",
+                "isMinimized": True,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "mutations: meta-comment-only",
+                    "mutations: none",
+                ),
+                "fullDatabaseId": "107",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "main_sha: " + main_sha,
+                    "main_sha: " + ("b" * 40),
+                ),
+                "fullDatabaseId": "108",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "verdict: exit-ready",
+                    "verdict: unknown",
+                ),
+                "fullDatabaseId": "109",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "human_decision_required: yes",
+                    "human_decision_required: no",
+                ),
+                "fullDatabaseId": "110",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "exit_criteria: pass",
+                    "exit_criteria: fail",
+                ),
+                "fullDatabaseId": "111",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "governance_consistency: consistent",
+                    "governance_consistency: inconsistent",
+                ),
+                "fullDatabaseId": "112",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "active_gate_transitioned: no",
+                    "active_gate_transitioned: yes",
+                ),
+                "fullDatabaseId": "113",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(main_sha, "exit-ready").replace(
+                    "audit_time: 2026-07-17T00:00:00+08:00",
+                    "audit_time: potato",
+                ),
+                "fullDatabaseId": "114",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+            {
+                "body": gate_audit_report_body(
+                    main_sha, "exit-ready"
+                ).replace(
+                    "\n\n— Gate Auditor",
+                    "\nmutations: meta-comment-only\n\n— Gate Auditor",
+                ),
+                "fullDatabaseId": "115",
+                "isMinimized": False,
+                "lastEditedAt": None,
+                "viewerDidAuthor": True,
+                "expected": "gate-audit-integrity",
+            },
+        )
+        for raw_audit in invalid_audits:
+            expected = raw_audit.pop("expected")
+            with self.subTest(expected=expected):
+                normalized = normalize_snapshot(
+                    graphql_payload(
+                        main_sha, [base_checkpoint, raw_audit]
+                    )
+                )
+                self.assertIsNone(normalized["gate_audit"])
+                if expected is None:
+                    self.assertEqual([], normalized["snapshot_incomplete"])
+                    self.assert_route(
+                        normalized, "gate-auditor", "gate-audit-requested"
+                    )
+                else:
+                    self.assertIn(expected, normalized["snapshot_incomplete"])
+                    self.assert_route(
+                        normalized, "dispatcher", "snapshot-incomplete"
+                    )
+
+    def test_checkpoint_gate_must_match_meta_active_gate(self) -> None:
+        main_sha = "a" * 40
+        normalized = normalize_snapshot(
+            graphql_payload(
+                main_sha,
+                [
+                    {
+                        "body": (
+                            "<!-- emmet-loop:dispatcher:gate-exit:"
+                            f"W1-G2:main={main_sha} -->\n\n— Dispatcher"
+                        ),
+                        "fullDatabaseId": "101",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    }
+                ],
+                active_gate="W1-G4",
+            )
+        )
+
+        self.assertIsNone(normalized["gate_exit"])
+        self.assertIn(
+            "gate-exit-gate-mismatch", normalized["snapshot_incomplete"]
+        )
+        self.assert_route(normalized, "dispatcher", "snapshot-incomplete")
+
+    def test_meta_active_gate_declaration_must_be_unique_and_effective(
+        self,
+    ) -> None:
+        payloads = (
+            "- Active gate：`W1-G2`",
+            f"{meta_body()}\n{meta_body('W1-G3')}",
+        )
+        for body in payloads:
+            with self.subTest(body=body):
+                payload = graphql_payload("a" * 40, [])
+                payload["data"]["repository"]["meta"]["body"] = body
+                normalized = normalize_snapshot(payload)
+                self.assertIsNone(normalized["active_gate"])
+                self.assertIn(
+                    "meta-active-gate", normalized["snapshot_incomplete"]
+                )
+                self.assert_route(
+                    normalized, "dispatcher", "snapshot-incomplete"
+                )
+
+    def test_edited_or_minimized_checkpoint_fails_closed(self) -> None:
+        main_sha = "a" * 40
+        marker = (
+            "<!-- emmet-loop:dispatcher:gate-exit:"
+            f"W1-G2:main={main_sha} -->\n\n— Dispatcher"
+        )
+        cases = (
+            (False, "2026-07-17T00:00:00Z"),
+            (True, None),
+        )
+        for minimized, edited_at in cases:
+            with self.subTest(minimized=minimized, edited_at=edited_at):
+                normalized = normalize_snapshot(
+                    graphql_payload(
+                        main_sha,
+                        [
+                            {
+                                "body": marker,
+                                "fullDatabaseId": "101",
+                                "isMinimized": minimized,
+                                "lastEditedAt": edited_at,
+                                "viewerDidAuthor": True,
+                            }
+                        ],
+                    )
+                )
+                self.assertIsNone(normalized["gate_exit"])
+                self.assertIn(
+                    "gate-exit-integrity",
+                    normalized["snapshot_incomplete"],
+                )
+                self.assert_route(
+                    normalized, "dispatcher", "snapshot-incomplete"
+                )
+
+    def test_quoted_role_signature_does_not_authorize_checkpoint(self) -> None:
+        main_sha = "a" * 40
+        normalized = normalize_snapshot(
+            graphql_payload(
+                main_sha,
+                [
+                    {
+                        "body": (
+                            "<!-- emmet-loop:dispatcher:gate-exit:"
+                            f"W1-G2:main={main_sha} -->\n\n> — Dispatcher"
+                        ),
+                        "fullDatabaseId": "101",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    }
+                ],
+            )
+        )
+
+        self.assertIsNone(normalized["gate_exit"])
+        self.assertEqual([], normalized["snapshot_incomplete"])
+        self.assert_route(
+            normalized, "dispatcher", "reconcile-or-dispatch"
+        )
+
+    def test_conflicting_audits_for_one_checkpoint_fail_closed(self) -> None:
+        main_sha = "a" * 40
+        checkpoint_marker = (
+            "<!-- emmet-loop:dispatcher:gate-exit:"
+            f"W1-G2:main={main_sha} -->\n\n— Dispatcher"
+        )
+
+        def audit_marker(verdict: str) -> str:
+            return gate_audit_report_body(main_sha, verdict)
+
+        normalized = normalize_snapshot(
+            graphql_payload(
+                main_sha,
+                [
+                    {
+                        "body": checkpoint_marker,
+                        "fullDatabaseId": "101",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                    {
+                        "body": audit_marker("exit-ready"),
+                        "fullDatabaseId": "102",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                    {
+                        "body": audit_marker("unknown"),
+                        "fullDatabaseId": "103",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                ],
+            )
+        )
+
+        self.assertIsNone(normalized["gate_audit"])
+        self.assertIn(
+            "gate-audit-conflict", normalized["snapshot_incomplete"]
+        )
+        self.assert_route(normalized, "dispatcher", "snapshot-incomplete")
+
+    def test_normalization_rejects_earlier_untrusted_or_mismatched_audits(
+        self,
+    ) -> None:
+        main_sha = "a" * 40
+        matching_audit = gate_audit_report_body(main_sha, "exit-ready")
+        checkpoint_marker = (
+            "<!-- emmet-loop:dispatcher:gate-exit:"
+            f"W1-G2:main={main_sha} -->\n\n— Dispatcher"
+        )
+        mismatched_audit = matching_audit.replace(
+            "checkpoint=101", "checkpoint=999"
+        )
+        normalized = normalize_snapshot(
+            graphql_payload(
+                main_sha,
+                [
+                    {
+                        "body": matching_audit,
+                        "fullDatabaseId": "100",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                    {
+                        "body": checkpoint_marker,
+                        "fullDatabaseId": "101",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                    {
+                        "body": matching_audit,
+                        "fullDatabaseId": "102",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": False,
+                    },
+                    {
+                        "body": mismatched_audit,
+                        "fullDatabaseId": "103",
+                        "isMinimized": False,
+                        "lastEditedAt": None,
+                        "viewerDidAuthor": True,
+                    },
+                ],
+            )
+        )
+
+        self.assertIsNone(normalized["gate_audit"])
+        self.assert_route(
+            normalized, "gate-auditor", "gate-audit-requested"
+        )
 
     def test_normalization_marks_paginated_state_incomplete(self) -> None:
         payload = {
@@ -518,6 +1174,7 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": "a" * 40},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": True},
@@ -564,6 +1221,7 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": "a" * 40},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {"nodes": []},
                         "comments": {"nodes": []},
                     },
@@ -591,6 +1249,7 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": "a" * 40},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": False},
@@ -637,6 +1296,7 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": "a" * 40},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": False},
@@ -680,6 +1340,7 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": current_main},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": False},
@@ -690,8 +1351,12 @@ class EventRoutingTests(unittest.TestCase):
                                     "body": (
                                         "<!-- emmet-loop:dispatcher:gate-exit:"
                                         f"W1-G2:main={'a' * 40} -->"
+                                        "\n\n— Dispatcher"
                                     ),
                                     "createdAt": "2026-07-15T00:00:00Z",
+                                    "fullDatabaseId": "201",
+                                    "isMinimized": False,
+                                    "lastEditedAt": None,
                                     "url": "https://example.test/stale",
                                     "viewerDidAuthor": True,
                                 },
@@ -699,8 +1364,12 @@ class EventRoutingTests(unittest.TestCase):
                                     "body": (
                                         "<!-- emmet-loop:dispatcher:gate-exit:"
                                         f"W1-G2:main={current_main} -->"
+                                        "\n\n— Dispatcher"
                                     ),
                                     "createdAt": "2026-07-15T00:01:00Z",
+                                    "fullDatabaseId": "202",
+                                    "isMinimized": False,
+                                    "lastEditedAt": None,
                                     "url": "https://example.test/untrusted",
                                     "viewerDidAuthor": False,
                                 }
@@ -733,6 +1402,7 @@ class EventRoutingTests(unittest.TestCase):
                         "target": {"oid": "a" * 40},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": False},
@@ -778,6 +1448,10 @@ class EventRoutingTests(unittest.TestCase):
         )
         self.assertIn("defaultBranchRef", query_argument)
         self.assertIn("comments(last: 100)", query_argument)
+        self.assertIn("fullDatabaseId", query_argument)
+        self.assertIn("isMinimized", query_argument)
+        self.assertIn("lastEditedAt", query_argument)
+        self.assertNotIn(" databaseId", query_argument)
         self.assertIn("pageInfo { hasNextPage }", query_argument)
 
     def test_busy_child_serializes_regular_role_wakes(self) -> None:
@@ -810,6 +1484,22 @@ class EventRoutingTests(unittest.TestCase):
         self.assertEqual("dispatcher", due[0]["role"])
         self.assertEqual("oversight-heartbeat", due[0]["reason"])
 
+    def test_dispatcher_heartbeat_does_not_replace_gate_auditor_wake(self) -> None:
+        main_sha = "a" * 40
+        decisions = select_poll_decisions(
+            snapshot(
+                main_sha=main_sha,
+                gate_exit=gate_checkpoint(main_sha),
+            ),
+            busy=[],
+            now=300,
+            last_dispatcher_wake=0,
+            dispatcher_heartbeat_seconds=30,
+        )
+
+        self.assertEqual("gate-auditor", decisions[0]["role"])
+        self.assertEqual("gate-audit-requested", decisions[0]["reason"])
+
     def test_pause_control_events_are_not_suppressed_by_busy_child(self) -> None:
         decisions = select_poll_decisions(
             snapshot(paused=True),
@@ -818,7 +1508,7 @@ class EventRoutingTests(unittest.TestCase):
             last_dispatcher_wake=0,
             dispatcher_heartbeat_seconds=30,
         )
-        self.assertEqual(3, len(decisions))
+        self.assertEqual(4, len(decisions))
         self.assertTrue(all(item["action"] == "paused" for item in decisions))
 
     def test_open_pull_request_disappearance_requires_dispatcher_cleanup(self) -> None:
@@ -846,7 +1536,8 @@ class OperatorStatusTests(unittest.TestCase):
         main_sha = "a" * 40
         state = snapshot(
             main_sha=main_sha,
-            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+            gate_exit=gate_checkpoint(main_sha),
+            gate_audit=audit_verdict(main_sha, "exit-ready"),
         )
 
         status = describe_operator_status(
@@ -864,6 +1555,64 @@ class OperatorStatusTests(unittest.TestCase):
         self.assertIn("W1-G2", status["current"])
         self.assertIn(main_sha, status["current"])
         self.assertIsNone(build_operator_alert(status))
+
+    def test_current_gate_exit_without_audit_names_gate_auditor_owner(
+        self,
+    ) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+        )
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("healthy", status["health"])
+        self.assertEqual("gate-auditor", status["owner"])
+        self.assertEqual("gate-audit-requested", status["reason"])
+        self.assertIn("checkpoint #101", status["current"])
+
+    def test_unknown_gate_audit_blocks_for_user(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+            gate_audit=audit_verdict(main_sha, "unknown"),
+        )
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("blocked", status["health"])
+        self.assertTrue(status["blocking"])
+        self.assertEqual("user", status["owner"])
+        self.assertEqual("gate-audit-unknown", status["reason"])
+        self.assertTrue(build_operator_alert(status)["requires_user"])
+
+    def test_not_ready_gate_audit_returns_operator_status_to_dispatcher(
+        self,
+    ) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+            gate_audit=audit_verdict(main_sha, "not-ready"),
+        )
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("healthy", status["health"])
+        self.assertEqual("dispatcher", status["owner"])
+        self.assertEqual("gate-audit-not-ready", status["reason"])
+        self.assertIn("不得執行 gate transition", status["next"])
 
     def test_queued_issue_explains_owner_and_next_transition(self) -> None:
         state = snapshot(
@@ -918,6 +1667,22 @@ class OperatorStatusTests(unittest.TestCase):
         self.assertEqual("snapshot-incomplete", status["reason"])
         self.assertIn("bounded live query", status["next"])
         self.assertIsNotNone(build_operator_alert(status))
+
+    def test_gate_marker_integrity_blocker_names_user_and_exact_gap(self) -> None:
+        state = snapshot(snapshot_incomplete=["gate-audit-integrity"])
+        status = describe_operator_status(
+            state,
+            decisions=classify_snapshot(state),
+            busy=[],
+        )
+
+        self.assertEqual("blocked", status["health"])
+        self.assertTrue(status["blocking"])
+        self.assertEqual("user", status["owner"])
+        self.assertIn("gate-audit-integrity", status["current"])
+        alert = build_operator_alert(status)
+        self.assertIsNotNone(alert)
+        self.assertTrue(alert["requires_user"])
 
     def test_incomplete_snapshot_iteration_is_not_a_durable_progress_stall(
         self,
@@ -1091,13 +1856,90 @@ class OperatorStatusTests(unittest.TestCase):
         before = snapshot(main_sha=main_sha)
         after = snapshot(
             main_sha=main_sha,
-            gate_exit={"gate": "W1-G2", "main_sha": main_sha},
+            gate_exit=gate_checkpoint(main_sha),
         )
 
         self.assertNotEqual(
             workflow_state_fingerprint(before),
             workflow_state_fingerprint(after),
         )
+
+    def test_gate_audit_verdict_changes_workflow_fingerprint(self) -> None:
+        main_sha = "a" * 40
+        before = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+        )
+        after = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+            gate_audit=audit_verdict(main_sha, "exit-ready"),
+        )
+
+        self.assertNotEqual(
+            workflow_state_fingerprint(before),
+            workflow_state_fingerprint(after),
+        )
+
+    def test_gate_auditor_completion_without_verdict_is_stalled(self) -> None:
+        main_sha = "a" * 40
+        state = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+        )
+        decision = classify_snapshot(state)[0]
+        stalled = detect_stalled_iteration(
+            state,
+            deliveries={
+                "gate-auditor": {
+                    "event_id": "audit-event",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(state),
+                }
+            },
+            agent_states={
+                "gate-auditor": {
+                    "state": "waiting",
+                    "last_event_id": "audit-event",
+                    "last_exit_code": 0,
+                }
+            },
+        )
+
+        self.assertIsNotNone(stalled)
+        self.assertEqual("gate-auditor", stalled["role"])
+
+    def test_matching_gate_audit_clears_gate_auditor_stall(self) -> None:
+        main_sha = "a" * 40
+        before = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+        )
+        after = snapshot(
+            main_sha=main_sha,
+            gate_exit=gate_checkpoint(main_sha),
+            gate_audit=audit_verdict(main_sha, "exit-ready"),
+        )
+        decision = classify_snapshot(before)[0]
+        stalled = detect_stalled_iteration(
+            after,
+            deliveries={
+                "gate-auditor": {
+                    "event_id": "audit-event",
+                    "reason": decision["reason"],
+                    "state_fingerprint": workflow_state_fingerprint(before),
+                }
+            },
+            agent_states={
+                "gate-auditor": {
+                    "state": "waiting",
+                    "last_event_id": "audit-event",
+                    "last_exit_code": 0,
+                }
+            },
+        )
+
+        self.assertIsNone(stalled)
 
     def test_mergeability_update_routes_a_fresh_event_without_stall(self) -> None:
         issue = loop_object("issue", 3, "loop:coding")
@@ -1372,6 +2214,20 @@ class OperatorAlertTests(unittest.TestCase):
         self.assertEqual(8, len(included))
         self.assertIn(10, [item["number"] for item in included])
         self.assertTrue(packet["objects"]["truncated"])
+
+    def test_preflight_packet_includes_bound_gate_audit(self) -> None:
+        main_sha = "a" * 40
+        packet = build_preflight_packet(
+            snapshot(
+                main_sha=main_sha,
+                gate_exit=gate_checkpoint(main_sha),
+                gate_audit=audit_verdict(main_sha, "exit-ready"),
+            )
+        )
+
+        self.assertEqual(101, packet["gate_exit"]["checkpoint_id"])
+        self.assertEqual("exit-ready", packet["gate_audit"]["verdict"])
+        self.assertEqual(102, packet["gate_audit"]["comment_id"])
 
     def test_event_fingerprint_ignores_comment_timestamps(self) -> None:
         before_issue = loop_object("issue", 3, "loop:queued")
@@ -1684,6 +2540,7 @@ class AgentRuntimeTests(unittest.TestCase):
                         "target": {"oid": "a" * 40},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": False},
@@ -1739,7 +2596,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('model_reasoning_effort="high"', arguments)
         self.assertIn('"preflight":', arguments[-1])
 
-    def test_event_manager_does_not_wake_for_current_gate_exit(self) -> None:
+    def test_event_manager_waits_for_user_after_exit_ready_gate_audit(self) -> None:
         main_sha = subprocess.run(
             ["git", "-C", str(self.worktree), "rev-parse", "HEAD"],
             check=True,
@@ -1754,6 +2611,7 @@ class AgentRuntimeTests(unittest.TestCase):
                         "target": {"oid": main_sha},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": False},
@@ -1764,9 +2622,24 @@ class AgentRuntimeTests(unittest.TestCase):
                                     "body": (
                                         "<!-- emmet-loop:dispatcher:gate-exit:"
                                         f"W1-G2:main={main_sha} -->"
+                                        "\n\n— Dispatcher"
                                     ),
                                     "createdAt": "2026-07-15T00:00:00Z",
+                                    "fullDatabaseId": "101",
+                                    "isMinimized": False,
+                                    "lastEditedAt": None,
                                     "url": "https://example.test/gate-exit",
+                                    "viewerDidAuthor": True,
+                                },
+                                {
+                                    "body": gate_audit_report_body(
+                                        main_sha, "exit-ready"
+                                    ),
+                                    "createdAt": "2026-07-15T00:01:00Z",
+                                    "fullDatabaseId": "102",
+                                    "isMinimized": False,
+                                    "lastEditedAt": None,
+                                    "url": "https://example.test/gate-audit",
                                     "viewerDidAuthor": True,
                                 }
                             ],
@@ -1936,6 +2809,7 @@ class AgentRuntimeTests(unittest.TestCase):
                         "target": {"oid": "b" * 40},
                     },
                     "meta": {
+                        "body": meta_body(),
                         "labels": {
                             "nodes": [],
                             "pageInfo": {"hasNextPage": False},
