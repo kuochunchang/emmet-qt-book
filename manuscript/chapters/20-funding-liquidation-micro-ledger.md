@@ -94,7 +94,9 @@ BTC funding 前後的最小核對式是：
 
 `LiquidationChecker` 對 Cross 單向簿使用 bar 內不利 mark 口徑；對實際對沖的 Cross 簿
 使用對齊 close，另輸出 worst-case 壓力值；Isolated 則逐部位判斷。資料缺 symbol、mark
-過期或 bracket 不相符時回傳 data gap，不能用最後已知值悄悄繼續。
+過期時回傳 data gap；部位找不到所需的 liquidation bracket configuration 時則直接拋出
+`DataIntegrityError`。兩條路徑都會 fail closed，不能用最後已知值或猜測的 bracket
+悄悄繼續。
 
 本固定案例的 BTC Cross margin balance 已非正，所以 trigger reason 是
 `margin_balance`。這是版本化回測假設下的清算決定，不是 Binance 真實清算回報，也不
@@ -103,12 +105,14 @@ BTC funding 前後的最小核對式是：
 ## 核心概念四：Decision 與入帳仍是兩個責任
 
 `LiquidationChecker` 產生 decision，`AccountingLedger.apply_liquidation` 才是唯一會計
-writer。Ledger 在提交前核對：
+writer。Phase 3 coordinator／harness 會先走 canonical 取消流程，套用 `CANCELED` event
+並釋放 reservation，再呼叫 `apply_liquidation`；這是呼叫順序，不是 Ledger 內部的
+reservation 核對。Ledger 在提交前核對：
 
 - Cross scope 必須包含當下全部非零 Cross positions；Isolated scope 只能包含指定部位；
 - 每條 leg 的 symbol、原 signed quantity、margin type 與帳本一致；
 - `fee = qty × execution_price × fee_rate`；
-- canceled order IDs 已排序、唯一，且 reservation 已由 canonical 取消流程釋放；
+- canceled order IDs 不含空值，且已排序、唯一；
 - projected wallet、positions 與 deficit 全部合法後才一次提交。
 
 BTC leg 以 `0.02 BTC`、execution price
