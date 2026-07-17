@@ -238,6 +238,13 @@ Gate：目前 <active>；稽核 <active>；後繼 <successor>（未生效）
 無效。不要直接建新 checkpoint：Dispatcher 先對 current main reconciliation，重驗
 zero WIP、三方 gate 與退出證據；全部仍成立才建 fresh checkpoint 並重新稽核。
 
+若結果卡顯示 GitHub 拒絕空白 body／stdin 關閉，表示 Auditor 把
+`gh issue comment ... --body-file -` 啟動在沒有 live stdin 的一般 command execution。
+修復後的角色程序會建立關閉 echo 的 interactive PTY／session，以 follow-up
+`write_stdin` 傳入 report 並送 EOF；不得改用 inline body、heredoc、pipe 或暫存檔。
+這種失敗沒有 durable verdict；先確認 exact marker 不存在，等 control inputs 合併並完成
+trusted runner rotation 後，再由 Dispatcher 建立或重送 fresh audit event。
+
 這張卡是 audit-time snapshot，不會在 main 日後移動時回頭改寫。要知道「此刻」是否仍
 有效，對照右下角 Events pane 的 current `operator-status`。若 Events 顯示不同 main、
 重新建立 checkpoint、
