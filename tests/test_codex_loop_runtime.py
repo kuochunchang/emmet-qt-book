@@ -2307,6 +2307,7 @@ class AgentRuntimeTests(unittest.TestCase):
         scripts = self.worktree / "scripts"
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts" / "codex_loop.py", scripts)
+        shutil.copy2(ROOT / "scripts" / "codex_loop_output.py", scripts)
         shutil.copy2(ROOT / "scripts" / "codex_loop_runtime.py", scripts)
         subprocess.run(
             [
@@ -2415,6 +2416,7 @@ class AgentRuntimeTests(unittest.TestCase):
         *,
         profile: str | None = None,
         codex_home: Path | None = None,
+        output_format: str | None = None,
     ) -> subprocess.Popen[str]:
         environment = os.environ.copy()
         environment["FAKE_CODEX_CAPTURE"] = str(self.capture)
@@ -2437,6 +2439,8 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         if profile is not None:
             command.extend(["--profile", profile])
+        if output_format is not None:
+            command.extend(["--output-format", output_format])
         process = subprocess.Popen(
             command,
             cwd=self.worktree,
@@ -2512,6 +2516,79 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(1, arguments.count("exec"))
         self.assertIn("--json", arguments)
         self.assertIn("$emmet-loop-dispatcher", arguments[-1])
+
+    def test_pretty_wake_renders_component_and_codex_events(self) -> None:
+        process = self.start_agent(output_format="pretty")
+        event = build_event(
+            {
+                "role": "dispatcher",
+                "action": "wake",
+                "reason": "test-pretty",
+                "objects": [],
+            },
+            "test/repo",
+        )
+        notify_agent(self.runtime_dir, event)
+        stdout, stderr = process.communicate(timeout=10)
+
+        self.assertEqual(0, process.returncode, stderr)
+        self.assertIn("fake-visible-event", stdout)
+        self.assertIn("dispatcher", stdout)
+        self.assertNotIn('"type": "item.completed"', stdout)
+        self.assertNotIn('"result": "iteration-finished"', stdout)
+        logs = self.runtime_dir / "logs"
+        raw_logs = list(logs.glob("dispatcher-*.stdout.jsonl"))
+        stderr_logs = list(logs.glob("dispatcher-*.stderr.log"))
+        component_logs = list(logs.glob("dispatcher-*.component.jsonl"))
+        self.assertEqual(1, len(raw_logs))
+        self.assertEqual(1, len(stderr_logs))
+        self.assertEqual(1, len(component_logs))
+        raw = raw_logs[0].read_text(encoding="utf-8")
+        self.assertIn('"type": "item.completed"', raw)
+        component_raw = component_logs[0].read_text(encoding="utf-8")
+        self.assertIn('"result": "iteration-finished"', component_raw)
+        self.assertEqual(0o700, logs.stat().st_mode & 0o777)
+        self.assertEqual(0o600, raw_logs[0].stat().st_mode & 0o777)
+
+    def test_runtime_output_format_defaults_to_auto(self) -> None:
+        agent = runtime_parser().parse_args(["agent", "dispatcher"])
+        events = runtime_parser().parse_args(["events"])
+
+        self.assertEqual("auto", agent.output_format)
+        self.assertEqual("auto", events.output_format)
+        self.assertEqual("pretty", events.rotation_output_format)
+
+    def test_pretty_agent_dry_run_does_not_create_raw_trace(self) -> None:
+        environment = os.environ.copy()
+        environment["FAKE_CODEX_CAPTURE"] = str(self.capture)
+        result = subprocess.run(
+            [
+                "python3",
+                str(self.worktree / "scripts" / "codex_loop_runtime.py"),
+                "agent",
+                "dispatcher",
+                "--workdir",
+                str(self.worktree),
+                "--codex-bin",
+                str(self.fake_codex),
+                "--runtime-dir",
+                str(self.runtime_dir),
+                "--output-format",
+                "pretty",
+                "--dry-run",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("$emmet-loop-dispatcher", result.stdout)
+        self.assertIn('"result": "preflight-ok"', result.stdout)
+        self.assertFalse((self.runtime_dir / "logs").exists())
+        self.assertFalse(self.capture.exists())
 
     def test_pause_event_is_visible_without_starting_codex(self) -> None:
         process = self.start_agent()

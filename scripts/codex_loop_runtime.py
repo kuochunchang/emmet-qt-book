@@ -111,9 +111,70 @@ query EmmetLoopState($owner: String!, $name: String!, $search: String!) {
 """
 
 
+_operator_output: adapter.LoopOutput | None = None
+
+
+def _activate_operator_output(
+    output: adapter.LoopOutput,
+) -> adapter.LoopOutput | None:
+    """Install one process-local renderer and return the previous sink."""
+
+    global _operator_output
+    previous = _operator_output
+    _operator_output = output
+    return previous
+
+
+def _restore_operator_output(
+    output: adapter.LoopOutput,
+    previous: adapter.LoopOutput | None,
+) -> None:
+    """Flush one renderer and restore the import-safe raw default."""
+
+    global _operator_output
+    try:
+        output.close()
+    except Exception as error:
+        try:
+            output.emit_diagnostic(
+                f"codex-loop: 無法完整關閉 operator output：{error}"
+            )
+        except Exception:
+            pass
+    finally:
+        if _operator_output is output:
+            _operator_output = previous
+
+
 def emit(**fields: object) -> None:
     """Write one operator-visible JSONL component record."""
 
+    global _operator_output
+    if _operator_output is not None:
+        output = _operator_output
+        try:
+            output.emit_component(fields)
+            return
+        except Exception as error:
+            output.degrade_to_jsonl()
+            try:
+                output.emit_diagnostic(
+                    "codex-loop: pretty renderer failed; reverting to JSONL: "
+                    f"{error}"
+                )
+            except Exception:
+                pass
+            try:
+                output.emit_component(fields)
+            except Exception as fallback_error:
+                try:
+                    output.emit_diagnostic(
+                        "codex-loop: degraded JSONL output unavailable: "
+                        f"{fallback_error}"
+                    )
+                except Exception:
+                    pass
+            return
     print(json.dumps(fields, ensure_ascii=False, sort_keys=True), flush=True)
 
 
@@ -432,6 +493,23 @@ def run_agent(options: argparse.Namespace) -> int:
     if options.dry_run:
         return 0
 
+    output = adapter.create_loop_output(
+        options.output_format,
+        component=options.role,
+        raw_log_dir=runtime_dir / "logs",
+        workdir=workdir,
+        common_dir=common_dir,
+    )
+    previous_output = _activate_operator_output(output)
+    if output.pretty:
+        emit(
+            component="agent",
+            role=options.role,
+            result="output-ready",
+            raw_stdout=str(output.raw_stdout_path),
+            raw_stderr=str(output.raw_stderr_path),
+            raw_component=str(output.raw_component_path),
+        )
     stop_requested = False
 
     def stop(_signum: int, _frame: object) -> None:
@@ -444,6 +522,7 @@ def run_agent(options: argparse.Namespace) -> int:
     }
     processed = 0
     completed_events: list[dict[str, object]] = []
+    result_code: int | None = None
     try:
         with adapter.role_lock(runtime_dir, options.role) as lock_descriptor:
             _write_agent_state(
@@ -533,9 +612,13 @@ def run_agent(options: argparse.Namespace) -> int:
                                 lock_descriptor,
                                 options.timeout_seconds,
                                 on_signal=lambda: stop(signal.SIGTERM, None),
+                                output=output,
                             )
-                        except ValueError as error:
-                            print(f"codex-loop: {error}", file=sys.stderr)
+                        except (OSError, RuntimeError, ValueError) as error:
+                            try:
+                                output.emit_diagnostic(f"codex-loop: {error}")
+                            except Exception:
+                                pass
                             exit_code = 2
                         event_id = event.get("event_id")
                         finished_at = time.strftime(
@@ -576,6 +659,7 @@ def run_agent(options: argparse.Namespace) -> int:
                             set_title(f"等待；上輪 exit {exit_code}")
                     if options.max_events and processed >= options.max_events:
                         break
+        result_code = 0
     except BlockingIOError as error:
         set_title("啟動失敗：已有同角色")
         emit(
@@ -584,19 +668,26 @@ def run_agent(options: argparse.Namespace) -> int:
             result="already-running",
             detail=str(error),
         )
-        return adapter.EX_TEMPFAIL
-    except OSError as error:
+        result_code = adapter.EX_TEMPFAIL
+    except (OSError, RuntimeError, ValueError) as error:
         set_title("錯誤：component")
-        print(f"codex-loop: agent socket 錯誤：{error}", file=sys.stderr)
-        return 2
+        try:
+            output.emit_diagnostic(
+                f"codex-loop: agent socket 錯誤：{error}"
+            )
+        except Exception:
+            pass
+        result_code = 2
     finally:
         endpoint.unlink(missing_ok=True)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-
-    set_title("已停止")
-    emit(component="agent", role=options.role, result="stopped")
-    return 0
+        if result_code == 0:
+            set_title("已停止")
+            emit(component="agent", role=options.role, result="stopped")
+        _restore_operator_output(output, previous_output)
+    assert result_code is not None
+    return result_code
 
 
 def _label_names(node: Mapping[str, object] | None) -> list[str]:
@@ -2445,6 +2536,8 @@ def start_control_rotation(
         "--rotation-state",
         str(state_path),
         "--no-attach",
+        "--output-format",
+        options.rotation_output_format,
         "--interval-seconds",
         str(options.interval_seconds),
         "--retry-seconds",
@@ -2527,6 +2620,22 @@ def run_events(options: argparse.Namespace) -> int:
         if options.runtime_dir
         else adapter.default_lock_dir(common_dir)
     )
+    output = adapter.create_loop_output(
+        "jsonl" if options.dry_run else options.output_format,
+        component="events",
+        raw_log_dir=runtime_dir / "logs",
+        workdir=workdir,
+        common_dir=common_dir,
+    )
+    previous_output = _activate_operator_output(output)
+    if output.pretty:
+        emit(
+            component="events",
+            result="output-ready",
+            raw_stdout=str(output.raw_stdout_path),
+            raw_stderr=str(output.raw_stderr_path),
+            raw_component=str(output.raw_component_path),
+        )
     manager_lock = adapter.role_lock(runtime_dir, "events")
     try:
         manager_lock.__enter__()
@@ -2537,6 +2646,7 @@ def run_events(options: argparse.Namespace) -> int:
             result="already-running",
             detail=str(error),
         )
+        _restore_operator_output(output, previous_output)
         return adapter.EX_TEMPFAIL
     delivered: dict[str, dict[str, object]] = {}
     active_alert: dict[str, object] | None = None
@@ -2564,6 +2674,9 @@ def run_events(options: argparse.Namespace) -> int:
         runtime_dir=str(runtime_dir),
     )
     set_title("讀取 GitHub")
+    result_code = 0
+    handoff = False
+    normal_exit = False
     try:
         while not stop_requested:
             set_title("讀取 GitHub")
@@ -2635,7 +2748,8 @@ def run_events(options: argparse.Namespace) -> int:
                         changed_control_paths=control_changes,
                     )
                     set_title("換代：handoff 完成")
-                    return 0
+                    handoff = True
+                    break
                 stalled = detect_stalled_iteration(
                     snapshot,
                     deliveries=delivered,
@@ -2861,22 +2975,29 @@ def run_events(options: argparse.Namespace) -> int:
                     dry_run=options.dry_run,
                 )
                 set_title(operator_pane_status(operator_status, active_alert))
-                print(f"codex-loop: {error}", file=sys.stderr)
+                try:
+                    output.emit_diagnostic(f"codex-loop: {error}")
+                except Exception:
+                    pass
                 if options.once or options.dry_run:
-                    return 2
+                    result_code = 2
+                    break
 
             if options.once or options.dry_run:
                 break
             deadline = time.monotonic() + options.interval_seconds
             while not stop_requested and time.monotonic() < deadline:
                 time.sleep(min(1.0, deadline - time.monotonic()))
+        normal_exit = True
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         manager_lock.__exit__(None, None, None)
-    set_title("已停止")
-    emit(component="events", result="stopped")
-    return 0
+        if normal_exit and not handoff and result_code == 0:
+            set_title("已停止")
+            emit(component="events", result="stopped")
+        _restore_operator_output(output, previous_output)
+    return result_code
 
 
 def parser() -> argparse.ArgumentParser:
@@ -2892,6 +3013,14 @@ def parser() -> argparse.ArgumentParser:
     agent.add_argument("--profile")
     agent.add_argument("--tmux-title", action="store_true", help=argparse.SUPPRESS)
     agent.add_argument("--tmux-bin", default="tmux", help=argparse.SUPPRESS)
+    agent.add_argument(
+        "--output-format",
+        choices=("auto", "pretty", "jsonl"),
+        default="auto",
+        help=(
+            "operator output；auto 在 TTY 使用 pretty，pipe／redirect 使用 JSONL。"
+        ),
+    )
     agent.add_argument("--runtime-dir", "--lock-dir", dest="runtime_dir", type=Path)
     agent.add_argument("--dry-run", action="store_true")
     agent.add_argument("--print-command", action="store_true")
@@ -2911,6 +3040,14 @@ def parser() -> argparse.ArgumentParser:
     events.add_argument("--tmux-title", action="store_true", help=argparse.SUPPRESS)
     events.add_argument("--tmux-bin", default="tmux", help=argparse.SUPPRESS)
     events.add_argument(
+        "--output-format",
+        choices=("auto", "pretty", "jsonl"),
+        default="auto",
+        help=(
+            "operator output；auto 在 TTY 使用 pretty，pipe／redirect 使用 JSONL。"
+        ),
+    )
+    events.add_argument(
         "--tmux-session",
         default="emmet-qt-book-loop",
         help=argparse.SUPPRESS,
@@ -2920,6 +3057,12 @@ def parser() -> argparse.ArgumentParser:
     )
     events.add_argument(
         "--rotation-profile", help=argparse.SUPPRESS
+    )
+    events.add_argument(
+        "--rotation-output-format",
+        choices=("auto", "pretty", "jsonl"),
+        default="pretty",
+        help=argparse.SUPPRESS,
     )
     for role in adapter.ROLES:
         events.add_argument(
