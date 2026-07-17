@@ -7,6 +7,87 @@ schema_version = 2
 W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
 
 [[records]]
+id = "ch20-v030-funding-liquidation-golden"
+batch = "W1"
+document = "manuscript/chapters/20-funding-liquidation-micro-ledger.md"
+chapter = "資金費、強平與微型交易核帳"
+claim = "v0.3.0 的 FundingSettlement、LiquidationChecker 與 Engine-owned AccountingLedger 可在 Phase 3 IT-3 固定 harness 中逐筆重現 funding posting、即時風險重估、清算前 canonical 撤單、Cross／Isolated scope、強平腿與 fee；版本化 golden 固定 40 causes、19 effects、6 fills、2 funding、1 liquidation，且 feed permutation／雙跑逐位一致、最終 position 與 reservation 都為零。"
+content_state = "可操作"
+data_checksums = [
+  "it3-canonical-json=sha256:f9e65a281e5fe242a75475e5c99832247b00f8d97a380a735cb99ffb908ef7c7",
+]
+data_checksum_note = "checksum 是 tests/fixtures/accounting/it3_golden.json 依 ensure_ascii=false、sort_keys=true、separators=(comma,colon) 重新 canonical serialization 後的 SHA-256，不是原始檔案 bytes checksum；fixture 只含固定 Phase 2／3 測試資料與 Decimal 字串，不是外部市場下載。"
+formal_entrypoints = [
+  "quant.common.fill.FundingSettlement.settle",
+  "quant.common.engine.AccountingLedger.apply_funding",
+  "quant.common.fill.LiquidationChecker.check",
+  "quant.common.engine.AccountingLedger.apply_liquidation",
+  "quant.common.engine.AccountingLedger.snapshot／reservations",
+]
+schemas = [
+  "quant.common.models.FundingDueEvent／FundingPostedEvent",
+  "quant.common.fill.FundingPosting",
+  "quant.common.fill.LiquidationDecision／RiskSample",
+  "quant.common.models.LiquidationEvent／LiquidationLeg／LiquidationScope",
+  "tests/fixtures/accounting/it3_golden.json schema_version=1",
+]
+interface_note = "已發布 Python 模型、會計服務與 Phase 3 harness 可重現固定 funding／liquidation 因果與帳本；IT-3 test harness、fixture 與隨書 helper 是支撐證據，不是完整 TradingEngine、正式讀者回測 CLI、交易所 connector、Paper／Testnet／Live 或 reconciliation 產品入口。"
+evidence_refs = [
+  "book:manuscript/chapters/20-funding-liquidation-micro-ledger.md",
+  "book:manuscript/appendices/e-perpetual-binance-mechanics.md",
+  "book:manuscript/assets/ch20-funding-liquidation-golden-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/accounting.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/funding.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/liquidation.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/liquidation.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_funding.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_funding.py",
+  "repo:emmet-qt-bt1:tests/unit/test_models_liquidation.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_liquidation_frames.py",
+  "repo:emmet-qt-bt1:tests/unit/test_fill_liquidation_checker.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_liquidation.py",
+  "repo:emmet-qt-bt1:tests/integration/test_it3_fill_execution.py",
+  "repo:emmet-qt-bt1:tests/fixtures/accounting/it3_golden.json",
+  "repo:emmet-qt-bt1:docs/quantitative-trading-system-design.md",
+  "repo:emmet-qt-bt1:docs/design/step-3b-fill-execution.md",
+  "repo:emmet-qt-bt1:docs/design/evidence/step-3b.md",
+  "repo:emmet-qt-bt1:CHANGELOG.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run pytest tests/unit/test_engine_funding.py tests/unit/test_fill_funding.py tests/unit/test_models_liquidation.py tests/unit/test_fill_liquidation_frames.py tests/unit/test_fill_liquidation_checker.py tests/unit/test_engine_liquidation.py tests/integration/test_it3_fill_execution.py -q",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch20-funding-liquidation-golden-oracle.py\"",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Python 3.12.3",
+  "112 passed",
+  "golden-sha256=f9e65a281e5fe242a75475e5c99832247b00f8d97a380a735cb99ffb908ef7c7",
+  "golden-counts=external:40,effects:19,fills:6,funding:2,liquidations:1",
+  "funding=BTCUSDT,qty:0.02,mark:9900,rate:0.26,cash-flow:-51.4800,margin-balance:49.08720025000->-2.39279975000",
+  "liquidation=scope:cross_account,reason:margin_balance,cancel:BT-F-00000004+BT-F-00000006,close:BTCUSDT-0.02,fee:1.005987950552208835341365462",
+  "isolated=ETHUSDT,funding:-0.2030,position-final:closed",
+  "final=futures-wallet:24.69955390988955823293172694,positions:0,reservations:0,spot-BTC:0.98,spot-USDT:1199.7001000000",
+  "chapter-20-funding-liquidation-golden-oracle=PASS",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；Python 3.12.3；funding、liquidation 與 IT-3 golden 的 7 個測試檔共 112 passed；helper 確認 canonical hash、40 causes／19 effects／6 fills／2 funding／1 liquidation、BTC -51.4800 funding 將 margin balance 49.08720025000 推到 -2.39279975000、effect_seq 0→3 的 posting／兩次撤單／Cross liquidation、精確強平 fee、ETH Isolated 邊界，以及 final positions／reservations 都為 0。"
+known_differences = [
+  "BTC 0.26 funding、mark、清算費率、bracket、餘額與所有成交都是版本化壓力測試輸入，不支持目前交易所費率、私人帳戶、即時風險或真實清算宣稱。",
+  "Phase 3 已發布本地 Python 會計與 Router-only harness，但完整 TradingEngine、正式回測 CLI、Paper／Testnet／Live、外部 user stream 與 reconciliation 尚未作為本章讀者入口。",
+  "bar／point mark 強平是明示近似模型；真實深度、保險基金、ADL、下架、多資產／Portfolio Margin 與稅務不在本 claim。",
+]
+verified_on = "2026-07-17"
+revalidation_triggers = [
+  "FundingSettlement、FundingPosting、AccountingLedger funding／liquidation、LiquidationChecker、RiskSample 或 LiquidationEvent 語義改變",
+  "IT-3 fixture、canonical serialization、golden hash、事件／成交數量、固定 helper 輸入／輸出或 PASS marker 改變",
+  "配套基線 tag／commit 或 Chapter 20 內容狀態改變",
+]
+
+[[records]]
 id = "ch19-v030-reservation-single-ledger"
 batch = "W1"
 document = "manuscript/chapters/19-reservation-partial-fill-single-ledger.md"
