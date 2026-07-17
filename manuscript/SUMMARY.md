@@ -33,7 +33,7 @@
 - [訂單意圖、生命週期與交易所回報](chapters/17-order-intent-lifecycle-reports.md)
 - [回測撮合不是交易所](chapters/18-backtest-matching-is-not-exchange.md)
 - [資金預留、部分成交與唯一帳本](chapters/19-reservation-partial-fill-single-ledger.md)
-- [資金費、強平與微型交易核帳]()
+- [資金費、強平與微型交易核帳](chapters/20-funding-liquidation-micro-ledger.md)
 
 # 第五篇　系統如何保護因果、資金與控制權
 
