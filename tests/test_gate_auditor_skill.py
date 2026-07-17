@@ -284,6 +284,22 @@ class LoopGateAuditorSkillContractTests(unittest.TestCase):
             self.assertNotIn("；audit@<12>", section)
             self.assertNotIn("技術摘要：role=gate-auditor", section)
 
+    def test_publication_uses_a_live_non_echoing_stdin_session(self) -> None:
+        for contract in (self.skill, self.claude):
+            for required in (
+                "不得直接啟動 bare `--body-file -`",
+                "interactive PTY／session",
+                "stty -echo && gh issue comment ... --body-file -",
+                "follow-up `write_stdin`",
+                "送出 EOF",
+                "stdin write 前已退出",
+                "exact-marker 重查規則",
+                "不得使用 inline `--body`、heredoc、pipe、shell substitution 或暫存檔",
+                "PTY 必須先關閉 echo",
+            ):
+                with self.subTest(required=required):
+                    self.assertIn(required, contract)
+
     def test_terminal_handoff_maps_verdicts_and_noop_without_new_state(self) -> None:
         for contract in (self.skill, self.claude):
             section = contract.split("## 結尾的操作者交接", 1)[1]

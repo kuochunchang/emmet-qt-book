@@ -206,6 +206,21 @@ class CodexLoopAdapterTests(unittest.TestCase):
         self.assertNotIn("model_reasoning_effort", joined)
         self.assertNotIn("model_verbosity", joined)
 
+    def test_gate_auditor_prompt_requires_live_stdin_transport(self) -> None:
+        command = build_command(
+            "gate-auditor", Path("/tmp/gate-auditor"), "/usr/bin/codex"
+        )
+
+        self.assertIn("do not launch a bare --body-file -", command[-1])
+        self.assertIn("live PTY session with echo disabled", command[-1])
+        self.assertIn("follow-up stdin", command[-1])
+        self.assertIn("terminate it with EOF", command[-1])
+
+        dispatcher = build_command(
+            "dispatcher", Path("/tmp/dispatcher"), "/usr/bin/codex"
+        )
+        self.assertNotIn("--body-file -", dispatcher[-1])
+
     def test_repo_defaults_bound_each_role_without_a_profile(self) -> None:
         expected = {
             "dispatcher": ("gpt-5.6-sol", "high"),
@@ -874,6 +889,10 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "Dispatcher 先對 current main reconciliation",
             "全部仍成立才建 fresh checkpoint",
             "第二、三欄固定是 `none / unknown`",
+            "interactive PTY／session",
+            "follow-up",
+            "`write_stdin`",
+            "送 EOF",
             "audit-time snapshot",
             "右下角 Events pane 的 current `operator-status`",
         ):

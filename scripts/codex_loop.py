@@ -257,6 +257,13 @@ def build_command(
         "event manager. Do not sleep, poll, schedule another run, or start a second "
         "iteration. If no safe action is available, report no-op and exit."
     )
+    if role == "gate-auditor":
+        prompt += (
+            " If publication is authorized, do not launch a bare --body-file - "
+            "command with closed stdin. Open a live PTY session with echo disabled, "
+            "send the complete report through follow-up stdin, terminate it with "
+            "EOF, and wait for the publication command to exit."
+        )
     command = [
         codex_bin,
         "exec",

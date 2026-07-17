@@ -147,11 +147,20 @@ file、branch/worktree、scheduler 與 gate declaration。
 
 ## 結尾的操作者交接
 
-成功發佈時，以 `gh issue comment ... --body-file -` 或等價的 stdin 路徑傳入完整 report；
-不得使用 inline `--body`，不要把 report body 放進會被 pretty renderer 顯示的 command
-argument，也不要在成功 command output 或 agent message 回顯整份 report。完整 report
-只留在 Meta #1；pretty 仍照常無損保留 client 實際產生的底層事件。Terminal 最後一則
-agent message 使用下列至多九個 logical lines：
+成功發佈時，以 `gh issue comment ... --body-file -` 或等價的 stdin 路徑傳入完整 report。
+Codex 的一般 command execution 沒有可用 stdin；不得直接啟動 bare `--body-file -` 命令，
+否則 `gh` 只會讀到 EOF 並送出空白 body。固定 transport 是：以 interactive PTY／session
+啟動 `stty -echo && gh issue comment ... --body-file -`，確認 command 仍在執行，再以
+follow-up `write_stdin` 傳入完整 report、送出 EOF，最後等待 command exit。其他 client
+必須使用等價的 live stdin channel；無法建立 live session 就不得嘗試發佈。若 command
+在 stdin write 前已退出，視為 publication failure，依 exact-marker 重查規則收斂，不得
+用第二種 transport 盲目重貼。
+
+不得使用 inline `--body`、heredoc、pipe、shell substitution 或暫存檔繞過這個 transport，
+也不要把 report body 放進會被 pretty renderer 顯示的 command argument，或在成功
+command output／agent message 回顯整份 report。PTY 必須先關閉 echo，完整 report 只留在
+Meta #1；pretty 仍照常無損保留 client 實際產生的底層事件。Terminal 最後一則 agent
+message 使用下列至多九個 logical lines：
 
 ```text
 Gate Auditor
