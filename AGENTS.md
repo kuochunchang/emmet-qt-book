@@ -27,32 +27,34 @@ README 若與對應權威來源不一致，以權威來源為準並修正 README
 
 > 寫作批次：W1
 >
-> Active gate：`W1-G4`
+> Active gate：`W1-final`
 >
 > 最後核准日期：2026-07-17
 >
-> 核准來源：使用者明確指示；追蹤 Issue #82
+> 核准來源：使用者明確指示；追蹤 Issue #96
 >
-> 前一 gate 完成證據：`W1-G3` — Issue #4；第 10 章 PR #70 @ `357c9fd`、
-> 第 11 章 PR #74 @ `5bf7d7c`、第 12 章 PR #78 @ `645694e`、第 13 章 PR #79 @
-> `166a722`、第 14 章 PR #80 @ `ab780b2`、第 15 章 PR #81 @ `2ffb6d6`；
-> 詳細驗證：Meta Issue #1 的 W1-G3 Dispatcher 退出證據留言 #4992215685
+> 前一 gate 完成證據：`W1-G4` — Issue #5；第 16 章 PR #84 @
+> `00aaaae94b6b40f27bd90cf4899785c0a3afb43a`、第 17 章 PR #85 @
+> `187b1b1d3fb9ebb562df24d1da7cd9ba95bfe029`、第 18 章 PR #86 @
+> `33524fb0bac80f0c5cc5b73c97adc49a7a3292b2`、第 19 章 PR #88 @
+> `39ce1f52e44e122cecde08272322e4002e3aa64d`、第 20 章 PR #89 @
+> `c964d3383d3c0af578fd600007a75bb0458b70f2`；詳細驗證：Meta Issue #1 的
+> W1-G4 Dispatcher checkpoint #5001173738 與 Gate Auditor `exit-ready` 稽核
+> #5001302856
 >
 > 詳細進入／退出條件：`docs/curriculum.md`「實施順序與啟動門檻」
 
 只有 default branch `main` 已合併的宣告能啟用 gate；feature branch、舊分支或
 未合併 PR 中的 gate 變更一律視為提案。
 
-`W1-G4` 目前只允許：
+`W1-final` 目前只允許：
 
-- Issue #5：撰寫第 16–20 章，完成合法訂單、訂單生命週期、回測撮合假設、
-  資金預留／部分成交／唯一帳本，以及資金費、強平與微型交易核帳。
-- Issue #6：只補寫第 16–20 章直接需要的相關附錄小節，不得一次預寫全部附錄。
-- Issue #7：隨第 16–20 章更新撮合假設、會計數字、golden 對照與逐筆核對的
-  驗證台帳，並保持開啟到 `W1-final`。
+- Issue #6：只完成尚未隨正文交付的 W1 附錄範圍，保持正文中的安全知識自足，
+  不得藉最終附錄驗收建立後續批次的讀者操作路徑。
+- Issue #7：執行 W1 全章驗證與新手試讀，核對會計數字、公式、系統型別、
+  外部事實、book check 與 claim 級台帳；試讀發現只做可追溯的 W1 修訂。
 - 經使用者明確核准、已有 GitHub Issue 追蹤且限於最小範圍的兩類修正：
-  - 直接阻擋 Issue #5、Issue #6 相關附錄或 Issue #7 對應章節台帳達成
-    `W1-G4` 退出條件的缺陷。
+  - 直接阻擋 Issue #6 或 Issue #7 達成 `W1-final` 退出條件的 W1 缺陷。
   - 修復 agent guard 未被載入，或 `AGENTS.md`、`docs/curriculum.md` 與 Meta
     Issue #1 不一致的治理缺陷。
 - 使用者核准且由 Meta Issue #1 追蹤的 gate-transition 工作。
@@ -66,10 +68,11 @@ README 若與對應權威來源不一致，以權威來源為準並修正 README
 建立或標記 Issue 本身不構成上述修正的授權；例外工作不得新增或實質擴寫正文／
 附錄，也不得取用後續 gate 的能力、範例、輸出或完成證據。
 
-`W1-G4` 完成前禁止：
+`W1-final` 完成前禁止：
 
-- 啟動 `W1-final` 的全章驗收或新手試讀，或提前關閉 Issue #6／#7。
-- 脫離 active 正文一次預寫 Issue #6 的全部附錄。
+- 在完整附錄、全章驗證、新手試讀與 Milestone 證據齊全前關閉 Issue #6／#7
+  或宣告 W1 完成。
+- 啟動 W2 或任何後續寫作批次；W1 完成不會自動授權下一個 gate。
 - 撰寫第 4、21–50 章的讀者操作內容。
 - 從配套系統開發分支取得範例、輸出或完成宣稱。
 
@@ -89,9 +92,10 @@ W1-G0  #8 ＋ #7 台帳骨架
   → W1-final  #6 ＋ #7 最終驗收
 ```
 
-Issue #6 只能隨目前 active gate 的正文補寫相關附錄。Issue #7 在 G0 建立骨架、
-G1–G4 隨章更新，並保持開啟到 `W1-final`。完整退出條件以 curriculum 為準，
-不能只看到前一 Issue 有活動就假設下一 gate 已啟動。
+Issue #6 在 G1–G4 只能隨 active 正文補寫相關附錄；進入 `W1-final` 後才可完成
+尚未隨正文交付的 W1 附錄。Issue #7 在 G0 建立骨架、G1–G4 隨章更新，並在
+`W1-final` 執行全章驗證與新手試讀。兩者都只能在完整退出證據成立時關閉；
+不能因 W1 完成就假設 W2 或其他後續 gate 已啟動。
 
 配套系統依賴：
 
