@@ -162,7 +162,7 @@ reviewer、gate-auditor，等待各自釋放 lock；接著清除本 launcher 擁
 建立缺少的 dedicated runner、拒絕不乾淨 runner，並把四個 runner 切到同一個
 `origin/main`。五項預檢通過後才清掉 stale socket 並開 tmux；四個 agent socket 都
 ready 之後，
-右下角 event manager 才會啟動。
+左下角 event manager 才會啟動。
 
 預設 session 名稱是 `emmet-qt-book-loop`，版面固定為：
 
@@ -170,9 +170,9 @@ ready 之後，
 | --- | --- |
 | 左上 | dispatcher agent |
 | 左中 | reviewer agent |
-| 左下 | Gate Auditor agent |
+| 左下 | event manager |
 | 右上 | coder agent |
-| 右下 | event manager |
+| 右下 | Gate Auditor agent |
 
 每個 pane 的上邊框會持續顯示 component 名稱與目前狀態，不必先從捲動中的
 pretty 事件或 JSONL 尋找最後一筆紀錄。例如：
@@ -195,9 +195,9 @@ Agent child 成功結束後標題回到 `等待事件`；非零 exit 或 timeout
 tmux 邊框會自動附加 `[已退出]`。Pane title 是易讀的即時摘要，不是 durable state；
 跨重啟仍以 GitHub Issue、PR、label、留言與完整 SHA 為準。
 
-### 右下角：流程健康與下一步
+### 左下角：流程健康與下一步
 
-先看右下角 pane title 判斷正常、暫停、停滯或阻斷；需要原因與恢復條件時，再看
+先看左下角 pane title 判斷正常、暫停、停滯或阻斷；需要原因與恢復條件時，再看
 event manager 每次 poll 輸出的 `operator-status`。Pretty 會優先顯示
 `health`、`current`、`next` 與 `attention`；完整 raw 記錄的
 `health`、`blocking`、`owner`、`current`、`next` 與 `attention` 都保留。要核對
@@ -216,7 +216,7 @@ event manager 每次 poll 輸出的 `operator-status`。Pretty 會優先顯示
 | `health=blocked` | 讀 `reason`／`attention`，修復 state、component 或 GitHub 讀取 |
 | `health=stalled` | iteration 結束但 workflow fingerprint 未變，推進已實質停住 |
 
-blocking 狀態第一次出現時，右下角會多一筆 `operator-alert`，並顯示簡短
+blocking 狀態第一次出現時，左下角會多一筆 `operator-alert`，並顯示簡短
 `LOOP ALERT [warning|critical]`；warning／critical 同時送 terminal bell。相同
 `alert_id` 持續時不重複響鈴或洗版；使用者設定的 pause 只顯示 notice、不響鈴。
 問題確實解除時會出現一次 `operator-resolved`／`LOOP RESOLVED`。目前沒有內建桌面、
@@ -320,7 +320,7 @@ trusted fallback，只有合併至 main 並完成換代後才生效。Codex 0.13
 `repo-default`、`profile` 或舊 generation 的 `inherited`。Launcher 啟動前與 adapter
 每次 wake 都重驗 profile 檔存在且 TOML 可解析，避免檔案消失時靜默退回 user config；
 實際 model entitlement 仍由 Codex 啟動時驗證。
-右下角 `events` 不啟動 Codex，也不使用模型。
+左下角 `events` 不啟動 Codex，也不使用模型。
 
 從舊三角色 session 執行新版 `tmux status` 時，launcher 會把缺少的
 `gate-auditor` profile 顯示為 `None`、execution source 顯示為 `inherited`，並把
