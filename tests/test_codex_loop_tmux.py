@@ -844,9 +844,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
         self.assertEqual(
             {
                 "dispatcher": "%1",
-                "coder": "%2",
-                "reviewer": "%3",
-                "gate-auditor": "%4",
+                "coder": "%3",
+                "reviewer": "%4",
+                "gate-auditor": "%2",
                 "events": "%5",
             },
             panes,
@@ -863,10 +863,10 @@ class CodexLoopTmuxTests(unittest.TestCase):
         ]
         self.assertEqual(
             [
-                ("%1", True, str(runners["coder"])),
-                ("%1", False, str(runners["reviewer"])),
-                ("%2", False, str(runners["gate-auditor"])),
-                ("%3", False, str(runners["dispatcher"])),
+                ("%1", True, str(runners["gate-auditor"])),
+                ("%1", False, str(runners["coder"])),
+                ("%3", False, str(runners["reviewer"])),
+                ("%2", False, str(runners["dispatcher"])),
             ],
             splits,
         )
@@ -878,9 +878,9 @@ class CodexLoopTmuxTests(unittest.TestCase):
         self.assertEqual(
             {
                 "%1": "dispatcher (啟動中)",
-                "%2": "coder (啟動中)",
-                "%3": "reviewer (啟動中)",
-                "%4": "gate-auditor (啟動中)",
+                "%2": "gate-auditor (啟動中)",
+                "%3": "coder (啟動中)",
+                "%4": "reviewer (啟動中)",
                 "%5": "events (等待 agents)",
             },
             titles,
@@ -893,6 +893,41 @@ class CodexLoopTmuxTests(unittest.TestCase):
         )
         self.assertIn("pane_dead", border_format)
         self.assertIn("已退出", border_format)
+
+    def test_dry_run_reports_the_same_workflow_ordered_pane_map(self) -> None:
+        runners = launcher.runner_workdirs(Path("/workspace/emmet-qt-book"))
+        commands = {
+            component: ["command", component]
+            for component in launcher.COMPONENTS
+        }
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            mock.patch.object(
+                launcher, "session_exists", return_value=False
+            ),
+            mock.patch.object(launcher, "emit") as emit,
+        ):
+            launcher.dry_run_plan(
+                "restart",
+                "test-loop",
+                "tmux",
+                Path("/repo/.git"),
+                runners,
+                Path(temporary),
+                commands,
+                None,
+            )
+
+        self.assertEqual(
+            {
+                "left-top": "dispatcher",
+                "left-middle": "coder",
+                "left-bottom": "reviewer",
+                "right-top": "gate-auditor",
+                "right-bottom": "events",
+            },
+            emit.call_args.kwargs["panes"],
+        )
 
     def test_marker_failure_removes_new_session(self) -> None:
         def fake_tmux(

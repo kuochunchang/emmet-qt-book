@@ -902,11 +902,24 @@ def create_tmux_session(
             tmux_bin, "kill-session", "-t", session, check=False
         )
         raise
-    coder = tmux_command(
+    gate_auditor = tmux_command(
         tmux_bin,
         "split-window",
         "-d",
         "-h",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        dispatcher,
+        "-c",
+        str(runners["gate-auditor"]),
+    ).stdout.strip()
+    coder = tmux_command(
+        tmux_bin,
+        "split-window",
+        "-d",
+        "-v",
         "-P",
         "-F",
         "#{pane_id}",
@@ -924,22 +937,9 @@ def create_tmux_session(
         "-F",
         "#{pane_id}",
         "-t",
-        dispatcher,
-        "-c",
-        str(runners["reviewer"]),
-    ).stdout.strip()
-    gate_auditor = tmux_command(
-        tmux_bin,
-        "split-window",
-        "-d",
-        "-v",
-        "-P",
-        "-F",
-        "#{pane_id}",
-        "-t",
         coder,
         "-c",
-        str(runners["gate-auditor"]),
+        str(runners["reviewer"]),
     ).stdout.strip()
     events = tmux_command(
         tmux_bin,
@@ -950,7 +950,7 @@ def create_tmux_session(
         "-F",
         "#{pane_id}",
         "-t",
-        reviewer,
+        gate_auditor,
         "-c",
         str(runners["dispatcher"]),
     ).stdout.strip()
@@ -1261,10 +1261,10 @@ def dry_run_plan(
         control_bootstrap=action in ("start", "restart"),
         panes={
             "left-top": "dispatcher",
-            "left-middle": "reviewer",
-            "left-bottom": "events",
-            "right-top": "coder",
-            "right-bottom": "gate-auditor",
+            "left-middle": "coder",
+            "left-bottom": "reviewer",
+            "right-top": "gate-auditor",
+            "right-bottom": "events",
         },
         runners={role: str(path) for role, path in runners.items()},
         commands={
