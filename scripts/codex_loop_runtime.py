@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import math
@@ -43,6 +44,20 @@ GATE_EXIT_MARKER_PATTERN = re.compile(
     r"(?P<gate>[A-Za-z0-9][A-Za-z0-9._-]{0,63}):"
     r"main=(?P<main_sha>[0-9a-f]{40})\s*-->"
 )
+GATE_AUDIT_MARKER_PATTERN = re.compile(
+    r"<!--\s*emmet-loop:gate-auditor:audit:v1:"
+    r"gate=(?P<gate>[A-Za-z0-9][A-Za-z0-9._-]{0,63}):"
+    r"main=(?P<main_sha>[0-9a-f]{40}):"
+    r"checkpoint=(?P<checkpoint_id>[1-9][0-9]{0,19}):"
+    r"verdict=(?P<verdict>not-ready|unknown|exit-ready)\s*-->"
+)
+META_ACTIVE_GATE_PATTERN = re.compile(
+    r"(?m)^- Active gate：`"
+    r"(?P<gate>[A-Za-z0-9][A-Za-z0-9._-]{0,63})`"
+    r"（已生效）\s*$"
+)
+DISPATCHER_SIGNATURE = "— Dispatcher"
+GATE_AUDITOR_SIGNATURE = "— Gate Auditor"
 ROTATION_STATE_FILENAME = "rotation-state.json"
 EVENT_QUERY = """
 query EmmetLoopState($owner: String!, $name: String!, $search: String!) {
@@ -52,12 +67,16 @@ query EmmetLoopState($owner: String!, $name: String!, $search: String!) {
       target { oid }
     }
     meta: issue(number: 1) {
+      body
       labels(first: 20) {
         nodes { name }
         pageInfo { hasNextPage }
       }
       comments(last: 100) {
-        nodes { body createdAt url viewerDidAuthor }
+        nodes {
+          body createdAt fullDatabaseId isMinimized lastEditedAt
+          url viewerDidAuthor
+        }
         pageInfo { hasPreviousPage }
       }
     }
@@ -177,6 +196,8 @@ def agent_event_pane_status(event: Mapping[str, object]) -> str:
         "pull-request-disappeared": "合併後整理",
         "operator-stall-reconciliation": "排除停滯",
         "snapshot-incomplete": "補查狀態中",
+        "gate-audit-requested": "Gate 稽核中",
+        "gate-audit-not-ready": "Gate 缺口協調中",
     }
     action = actions.get(reason, "執行中")
     reference = _object_reference(
@@ -231,6 +252,7 @@ def operator_pane_status(
             "invalid-pull-request-state": "阻斷：PR 狀態無效",
             "invalid-issue-state": "阻斷：Issue 狀態無效",
             "snapshot-incomplete": "阻斷：GitHub 狀態快照不完整",
+            "gate-audit-unknown": "阻斷：Gate 稽核證據不確定",
         }
         if reason in messages:
             return messages[reason]
@@ -306,7 +328,7 @@ def command_with_event_context(
         "main SHA, and the target labels/head/base. Expand history only when "
         "target evidence is missing or ambiguous. snapshot_incomplete blocks "
         "until its gap is filled; object truncation concerns only omitted target "
-        "evidence, and meta comment truncation only gate-exit markers."
+        "evidence, and meta comment truncation only gate-exit or gate-audit markers."
         f"\n{payload}"
     )
     return result
@@ -602,19 +624,114 @@ def _default_main_sha(repository: Mapping[str, object]) -> str | None:
     return oid
 
 
-def _current_gate_exit(
+def _comment_database_id(comment: Mapping[str, object]) -> int | None:
+    value = comment.get("fullDatabaseId")
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[1-9][0-9]{0,19}", value) is None
+    ):
+        return None
+    return int(value)
+
+
+def _comment_has_signature(body: str, signature: str) -> bool:
+    lines = body.rstrip().splitlines()
+    return bool(lines) and lines[-1] == signature
+
+
+def _comment_is_pristine(comment: Mapping[str, object]) -> bool:
+    return (
+        comment.get("isMinimized") is False
+        and "lastEditedAt" in comment
+        and comment.get("lastEditedAt") is None
+        and _comment_database_id(comment) is not None
+    )
+
+
+def _unique_report_field(body: str, name: str) -> str | None:
+    pattern = re.compile(
+        rf"(?m)^{re.escape(name)}:[ \t]+(?P<value>[^\r\n]+?)[ \t]*$"
+    )
+    matches = list(pattern.finditer(body))
+    if len(matches) != 1:
+        return None
+    return matches[0].group("value")
+
+
+def _gate_audit_report_is_complete(body: str, marker: re.Match[str]) -> bool:
+    verdict = marker.group("verdict")
+    expected = {
+        "skill": "$emmet-loop-gate-auditor",
+        "verdict": verdict,
+        "exit_criteria": {
+            "not-ready": "fail",
+            "unknown": "unknown",
+            "exit-ready": "pass",
+        }[verdict],
+        "governance_consistency": "consistent",
+        "active_gate_transitioned": "no",
+        "audited_gate": marker.group("gate"),
+        "observed_active_gate": marker.group("gate"),
+        "main_sha": marker.group("main_sha"),
+        "audit_mutations": "none",
+        "publication_mutation": "meta-comment-only",
+        "mutations": "meta-comment-only",
+        "human_decision_required": (
+            "no" if verdict == "not-ready" else "yes"
+        ),
+    }
+    if any(
+        _unique_report_field(body, name) != value
+        for name, value in expected.items()
+    ):
+        return False
+    if _unique_report_field(body, "local_cache_refresh") not in {
+        "none",
+        "git-fetch",
+    }:
+        return False
+    successor = _unique_report_field(body, "successor_gate")
+    audit_time = _unique_report_field(body, "audit_time")
+    if (
+        successor is None
+        or re.fullmatch(
+            r"(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}|none|unknown)",
+            successor,
+        )
+        is None
+        or audit_time is None
+    ):
+        return False
+    try:
+        parsed_time = datetime.fromisoformat(audit_time)
+    except ValueError:
+        return False
+    return parsed_time.tzinfo is not None and parsed_time.utcoffset() is not None
+
+
+def _current_gate_state(
     meta: Mapping[str, object] | None,
     main_sha: str | None,
-) -> dict[str, object] | None:
-    """Return only a gate-exit marker bound to the current default main."""
+    active_gate: str | None,
+) -> tuple[
+    dict[str, object] | None,
+    dict[str, object] | None,
+    set[str],
+]:
+    """Return the current checkpoint and its exact later audit, if present."""
 
-    if meta is None or main_sha is None:
-        return None
+    errors: set[str] = set()
+    if meta is None or main_sha is None or active_gate is None:
+        return None, None, errors
     comments = meta.get("comments")
     nodes = comments.get("nodes") if isinstance(comments, Mapping) else None
     if not isinstance(nodes, list):
-        return None
-    for comment in reversed(nodes):
+        return None, None, errors
+
+    checkpoint: dict[str, object] | None = None
+    checkpoint_index: int | None = None
+    for index in range(len(nodes) - 1, -1, -1):
+        comment = nodes[index]
         if not isinstance(comment, Mapping):
             continue
         if comment.get("viewerDidAuthor") is not True:
@@ -623,16 +740,96 @@ def _current_gate_exit(
         if not isinstance(body, str):
             continue
         matches = list(GATE_EXIT_MARKER_PATTERN.finditer(body))
-        for match in reversed(matches):
-            if match.group("main_sha") != main_sha:
-                continue
-            return {
+        current_matches = [
+            match for match in matches if match.group("main_sha") == main_sha
+        ]
+        if not current_matches:
+            continue
+        # A valid audit report may quote its exact Dispatcher checkpoint.
+        # The role signature keeps that evidence from becoming a checkpoint.
+        if _comment_has_signature(body, GATE_AUDITOR_SIGNATURE):
+            continue
+        if not _comment_has_signature(body, DISPATCHER_SIGNATURE):
+            continue
+        if len(matches) != 1 or len(current_matches) != 1:
+            errors.add("gate-exit-integrity")
+            return None, None, errors
+        match = current_matches[0]
+        if match.group("gate") != active_gate:
+            errors.add("gate-exit-gate-mismatch")
+            return None, None, errors
+        checkpoint_id = _comment_database_id(comment)
+        if checkpoint_id is None or not _comment_is_pristine(comment):
+            errors.add("gate-exit-integrity")
+            return None, None, errors
+        checkpoint = {
+            "gate": match.group("gate"),
+            "main_sha": main_sha,
+            "checkpoint_id": checkpoint_id,
+            "url": comment.get("url"),
+            "created_at": comment.get("createdAt"),
+        }
+        checkpoint_index = index
+        break
+
+    if checkpoint is None or checkpoint_index is None:
+        return None, None, errors
+
+    audits: list[dict[str, object]] = []
+    for index in range(len(nodes) - 1, checkpoint_index, -1):
+        comment = nodes[index]
+        if not isinstance(comment, Mapping):
+            continue
+        if comment.get("viewerDidAuthor") is not True:
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        if not _comment_has_signature(body, GATE_AUDITOR_SIGNATURE):
+            continue
+        matches = list(GATE_AUDIT_MARKER_PATTERN.finditer(body))
+        matching = [
+            match
+            for match in matches
+            if (
+                match.group("gate") == checkpoint["gate"]
+                and match.group("main_sha") == checkpoint["main_sha"]
+                and int(match.group("checkpoint_id"))
+                == checkpoint["checkpoint_id"]
+            )
+        ]
+        if not matching:
+            continue
+        lines = body.splitlines()
+        first_line = lines[0] if lines else ""
+        if (
+            len(matches) != 1
+            or len(matching) != 1
+            or GATE_AUDIT_MARKER_PATTERN.fullmatch(first_line) is None
+            or not _comment_is_pristine(comment)
+            or not _gate_audit_report_is_complete(body, matching[0])
+        ):
+            errors.add("gate-audit-integrity")
+            return checkpoint, None, errors
+        match = matching[0]
+        comment_id = _comment_database_id(comment)
+        assert comment_id is not None
+        audits.append(
+            {
                 "gate": match.group("gate"),
-                "main_sha": main_sha,
+                "main_sha": match.group("main_sha"),
+                "checkpoint_id": int(match.group("checkpoint_id")),
+                "verdict": match.group("verdict"),
+                "comment_id": comment_id,
                 "url": comment.get("url"),
                 "created_at": comment.get("createdAt"),
             }
-    return None
+        )
+    verdicts = {audit["verdict"] for audit in audits}
+    if len(verdicts) > 1:
+        errors.add("gate-audit-conflict")
+        return checkpoint, None, errors
+    return checkpoint, audits[0] if audits else None, errors
 
 
 def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
@@ -655,6 +852,19 @@ def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
     incomplete: set[str] = set()
     if meta_mapping is None:
         incomplete.add("meta-issue")
+    meta_body = meta_mapping.get("body") if meta_mapping else None
+    active_gate_matches = (
+        list(META_ACTIVE_GATE_PATTERN.finditer(meta_body))
+        if isinstance(meta_body, str)
+        else []
+    )
+    active_gate = (
+        active_gate_matches[0].group("gate")
+        if len(active_gate_matches) == 1
+        else None
+    )
+    if active_gate is None:
+        incomplete.add("meta-active-gate")
     meta_labels = meta_mapping.get("labels") if meta_mapping else None
     meta_label_nodes = (
         meta_labels.get("nodes") if isinstance(meta_labels, Mapping) else None
@@ -678,7 +888,10 @@ def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
     main_sha = _default_main_sha(repository)
     if main_sha is None:
         incomplete.add("default-main")
-    gate_exit = _current_gate_exit(meta_mapping, main_sha)
+    gate_exit, gate_audit, gate_state_errors = _current_gate_state(
+        meta_mapping, main_sha, active_gate
+    )
+    incomplete.update(gate_state_errors)
     comments = meta_mapping.get("comments") if meta_mapping else None
     comment_nodes = (
         comments.get("nodes") if isinstance(comments, Mapping) else None
@@ -767,12 +980,51 @@ def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
     return {
         "paused": paused,
         "main_sha": main_sha,
+        "active_gate": active_gate,
         "gate_exit": gate_exit,
+        "gate_audit": gate_audit,
         "meta_comments_truncated": meta_comments_truncated,
         "snapshot_incomplete": sorted(incomplete),
         "issues": sorted(issues, key=key),
         "pull_requests": sorted(pull_requests, key=key),
     }
+
+
+def _current_gate_checkpoint(
+    snapshot: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    gate_exit = snapshot.get("gate_exit")
+    if not isinstance(gate_exit, Mapping):
+        return None
+    checkpoint_id = gate_exit.get("checkpoint_id")
+    if (
+        gate_exit.get("main_sha") != snapshot.get("main_sha")
+        or gate_exit.get("gate") != snapshot.get("active_gate")
+        or not isinstance(gate_exit.get("gate"), str)
+        or not isinstance(checkpoint_id, int)
+        or isinstance(checkpoint_id, bool)
+        or checkpoint_id <= 0
+    ):
+        return None
+    return gate_exit
+
+
+def _matching_gate_audit(
+    snapshot: Mapping[str, object],
+    checkpoint: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    gate_audit = snapshot.get("gate_audit")
+    if not isinstance(gate_audit, Mapping):
+        return None
+    if (
+        gate_audit.get("gate") != checkpoint.get("gate")
+        or gate_audit.get("main_sha") != checkpoint.get("main_sha")
+        or gate_audit.get("checkpoint_id") != checkpoint.get("checkpoint_id")
+        or gate_audit.get("verdict")
+        not in {"not-ready", "unknown", "exit-ready"}
+    ):
+        return None
+    return gate_audit
 
 
 def classify_snapshot(snapshot: Mapping[str, object]) -> list[dict[str, object]]:
@@ -888,11 +1140,28 @@ def classify_snapshot(snapshot: Mapping[str, object]) -> list[dict[str, object]]
             }
         ]
 
-    gate_exit = snapshot.get("gate_exit")
-    if (
-        isinstance(gate_exit, Mapping)
-        and gate_exit.get("main_sha") == snapshot.get("main_sha")
-    ):
+    gate_exit = _current_gate_checkpoint(snapshot)
+    if gate_exit is not None:
+        gate_audit = _matching_gate_audit(snapshot, gate_exit)
+        if gate_audit is None:
+            return [
+                {
+                    "role": "gate-auditor",
+                    "action": "wake",
+                    "reason": "gate-audit-requested",
+                    "objects": [],
+                }
+            ]
+        verdict = gate_audit.get("verdict")
+        if verdict == "not-ready":
+            return [
+                {
+                    "role": "dispatcher",
+                    "action": "wake",
+                    "reason": "gate-audit-not-ready",
+                    "objects": [],
+                }
+            ]
         return []
 
     return [
@@ -943,12 +1212,25 @@ def workflow_state_fingerprint(snapshot: Mapping[str, object]) -> str:
     canonical = {
         "paused": snapshot.get("paused") is True,
         "main_sha": snapshot.get("main_sha"),
+        "active_gate": snapshot.get("active_gate"),
         "gate_exit": (
             {
                 "gate": snapshot["gate_exit"].get("gate"),
                 "main_sha": snapshot["gate_exit"].get("main_sha"),
+                "checkpoint_id": snapshot["gate_exit"].get("checkpoint_id"),
             }
             if isinstance(snapshot.get("gate_exit"), Mapping)
+            else None
+        ),
+        "gate_audit": (
+            {
+                "gate": snapshot["gate_audit"].get("gate"),
+                "main_sha": snapshot["gate_audit"].get("main_sha"),
+                "checkpoint_id": snapshot["gate_audit"].get("checkpoint_id"),
+                "verdict": snapshot["gate_audit"].get("verdict"),
+                "comment_id": snapshot["gate_audit"].get("comment_id"),
+            }
+            if isinstance(snapshot.get("gate_audit"), Mapping)
             else None
         ),
         "issues": stable_items("issues"),
@@ -1140,7 +1422,7 @@ def describe_operator_status(
             blocking=True,
             owner="operator",
             reason="global-pause",
-            current="Meta Issue #1 帶有 loop:paused；三個角色都不會啟動 Codex。",
+            current="Meta Issue #1 帶有 loop:paused；所有角色都不會啟動 Codex。",
             next_step=(
                 "操作者先核對 durable state，再明確移除 loop:paused；"
                 "移除前不應手動喚醒角色。"
@@ -1218,11 +1500,57 @@ def describe_operator_status(
             ),
         )
 
-    gate_exit = snapshot.get("gate_exit")
+    gate_exit = _current_gate_checkpoint(snapshot)
+    gate_audit = (
+        _matching_gate_audit(snapshot, gate_exit)
+        if gate_exit is not None
+        else None
+    )
+    if not objects and gate_exit is not None and gate_audit is None:
+        gate = str(gate_exit.get("gate") or "目前 gate")
+        main_sha = str(gate_exit.get("main_sha") or "")
+        checkpoint_id = gate_exit.get("checkpoint_id")
+        return status(
+            health="healthy",
+            blocking=False,
+            owner="gate-auditor",
+            reason="gate-audit-requested",
+            current=(
+                f"{gate} 退出 checkpoint #{checkpoint_id} 已綁定 "
+                f"main@{main_sha}，尚無 matching Gate Auditor verdict。"
+            ),
+            next_step=(
+                "gate-auditor 應唯讀核對退出條件，重新驗證 checkpoint 與 main，"
+                "並留下唯一 SHA／checkpoint-bound verdict。"
+            ),
+        )
     if (
         not objects
-        and isinstance(gate_exit, Mapping)
-        and gate_exit.get("main_sha") == snapshot.get("main_sha")
+        and gate_exit is not None
+        and gate_audit is not None
+        and gate_audit.get("verdict") == "unknown"
+    ):
+        return status(
+            health="blocked",
+            blocking=True,
+            owner="user",
+            reason="gate-audit-unknown",
+            current=(
+                f"{gate_exit.get('gate')} checkpoint "
+                f"#{gate_exit.get('checkpoint_id')} 的 Gate Auditor verdict 是 unknown。"
+            ),
+            next_step=(
+                "使用者應先解決稽核報告中的缺失或權威歧義；"
+                "在新的 dispatcher checkpoint 與 audit 前不得執行 gate transition。"
+            ),
+            attention="Gate audit evidence is incomplete or ambiguous.",
+            affected_role="user",
+        )
+    if (
+        not objects
+        and gate_exit is not None
+        and gate_audit is not None
+        and gate_audit.get("verdict") == "exit-ready"
     ):
         gate = str(gate_exit.get("gate") or "目前 gate")
         main_sha = str(gate_exit.get("main_sha") or "")
@@ -1232,7 +1560,8 @@ def describe_operator_status(
             owner="user",
             reason="gate-transition-awaiting-user",
             current=(
-                f"{gate} 退出證據已綁定 main@{main_sha}；"
+                f"{gate} 退出證據與 Gate Auditor exit-ready verdict "
+                f"已綁定 main@{main_sha}；"
                 "目前沒有 active loop work item。"
             ),
             next_step=(
@@ -1252,9 +1581,35 @@ def describe_operator_status(
         "invalid-pull-request-state",
         "invalid-issue-state",
         "snapshot-incomplete",
+        "gate-audit-unknown",
     }
     if reason in blocking_reasons:
         if reason == "snapshot-incomplete":
+            raw_gaps = snapshot.get("snapshot_incomplete", [])
+            gate_gaps = sorted(
+                str(gap)
+                for gap in raw_gaps
+                if isinstance(gap, str) and gap.startswith("gate-")
+            )
+            if gate_gaps:
+                detail = ", ".join(gate_gaps)
+                return status(
+                    health="blocked",
+                    blocking=True,
+                    owner="user",
+                    reason=reason,
+                    current=(
+                        f"{scope}；durable gate marker invariant 不成立："
+                        f"{detail}。"
+                    ),
+                    next_step=(
+                        "先由 dispatcher 做唯讀 targeted diagnosis，再由使用者決定"
+                        " canonical recovery；問題解除前不得修改 durable state 或執行"
+                        " gate transition。"
+                    ),
+                    attention=f"durable gate marker invariant: {detail}",
+                    affected_role="user",
+                )
             return status(
                 health="blocked",
                 blocking=True,
@@ -1330,6 +1685,11 @@ def describe_operator_status(
             "dispatcher 應 reconciliation 既有證據、判斷 gate exit，"
             "或只派一個 loop:queued Issue。",
         ),
+        "gate-audit-not-ready": (
+            "dispatcher",
+            "dispatcher 應依 Gate Auditor finding 恢復尚未完成的 active-gate 工作，"
+            "不得執行 gate transition。",
+        ),
     }
     owner, next_step = guidance.get(
         reason,
@@ -1364,6 +1724,7 @@ HOLD_ALERT_UNTIL_STATE_CHANGE = frozenset(
         "invalid-pull-request-state",
         "invalid-issue-state",
         "snapshot-incomplete",
+        "gate-audit-unknown",
     }
 )
 
@@ -1390,6 +1751,8 @@ def build_operator_alert(
     exit_code = status.get("exit_code")
     requires_user = (
         blocker == "global-pause"
+        or blocker == "gate-audit-unknown"
+        or status.get("owner") == "user"
         or severity == "critical"
         or (
             blocker == "no-durable-progress-after-iteration"
@@ -1665,17 +2028,31 @@ def build_preflight_packet(
         for item in ordered[:MAX_PREFLIGHT_OBJECTS]
     ]
     gate_exit = snapshot.get("gate_exit")
+    gate_audit = snapshot.get("gate_audit")
     packet: dict[str, object] = {
         "version": 1,
         "source": "event-manager-poll",
         "paused": snapshot.get("paused") is True,
         "main_sha": snapshot.get("main_sha"),
+        "active_gate": snapshot.get("active_gate"),
         "gate_exit": (
             {
                 "gate": gate_exit.get("gate"),
                 "main_sha": gate_exit.get("main_sha"),
+                "checkpoint_id": gate_exit.get("checkpoint_id"),
             }
             if isinstance(gate_exit, Mapping)
+            else None
+        ),
+        "gate_audit": (
+            {
+                "gate": gate_audit.get("gate"),
+                "main_sha": gate_audit.get("main_sha"),
+                "checkpoint_id": gate_audit.get("checkpoint_id"),
+                "verdict": gate_audit.get("verdict"),
+                "comment_id": gate_audit.get("comment_id"),
+            }
+            if isinstance(gate_audit, Mapping)
             else None
         ),
         "meta_comments_truncated": snapshot.get("meta_comments_truncated")
@@ -1898,6 +2275,7 @@ def select_poll_decisions(
     if (
         decisions
         and decisions[0]["role"] != "dispatcher"
+        and decisions[0].get("reason") != "gate-audit-requested"
         and now - last_dispatcher_wake >= dispatcher_heartbeat_seconds
     ):
         return [
@@ -2077,7 +2455,8 @@ def start_control_rotation(
     if options.rotation_profile:
         command.extend(["--profile", options.rotation_profile])
     for role in adapter.ROLES:
-        selected_profile = getattr(options, f"rotation_{role}_profile")
+        option_key = adapter.role_option_key(role)
+        selected_profile = getattr(options, f"rotation_{option_key}_profile")
         if selected_profile:
             command.extend([f"--{role}-profile", selected_profile])
     try:
@@ -2545,6 +2924,7 @@ def parser() -> argparse.ArgumentParser:
     for role in adapter.ROLES:
         events.add_argument(
             f"--rotation-{role}-profile",
+            dest=f"rotation_{adapter.role_option_key(role)}_profile",
             help=argparse.SUPPRESS,
         )
     events.add_argument("--repo")

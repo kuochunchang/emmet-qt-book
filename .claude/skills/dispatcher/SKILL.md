@@ -41,11 +41,17 @@ description: agent 閉環的 one-shot 調度角色——恢復 GitHub durable st
    approval 先留含 reviewed／current SHA 的穩定 marker，再以期望的完整 label set
    機械性退回 `needs-review` 並退出。已有 durable marker 時不重複留言。
 5. 新動作優先序：
-   1. 在任何派工前檢查 gate exit；已完成只彙整 Issue／PR／merge SHA，並在 Meta
+   1. 在任何派工前檢查 gate exit，也核對目前 gate／main 的最新 Dispatcher checkpoint
+      是否已有綁定該 comment ID 的有效 Gate Auditor audit。`not-ready` 只 supersede
+      它綁定的舊 checkpoint，可依其明確缺口恢復或派目前 active-gate 工作；`unknown`
+      不授權猜測，`exit-ready` 只等待人類。缺口解決且退出條件重新成立時，在 Meta
       Issue #1 留下署名通知與精確 marker
-      `<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->`。先搜尋相同 marker，
-      存在就不重複留言；它只綁定目前 `main`，讓 event manager 在無 WIP 時進入
-      `awaiting-user`，不構成 gate transition 核准。
+      `<!-- emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA> -->`；即使 main SHA 與
+      marker 文字未變，也必須建立新的 checkpoint comment 取得新 comment ID，舊 audit
+      不綁定新 checkpoint。沒有 superseding `not-ready` audit 時維持正常 duplicate suppression：
+      仍先搜尋相同 marker，存在就不重複留言。新 checkpoint 必須再由
+      Gate Auditor 稽核；只有 matching `exit-ready` 才進入 `awaiting-user`，不構成
+      gate transition 核准。
    2. 合併一個符合下方條件的 unblocked `approved` PR。
    3. 依 primary label timeline 處理超過 6 小時的停滯、第三次退件或圈外 PR。
    4. WIP 為零、無 blocked 且 gate 未退出時，依模板派一個 gate-scoped slice。

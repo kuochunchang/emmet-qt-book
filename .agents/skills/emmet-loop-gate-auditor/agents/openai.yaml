@@ -1,0 +1,7 @@
+interface:
+  display_name: "Emmet Loop Gate Auditor"
+  short_description: "Audit one dispatcher gate-exit checkpoint"
+  default_prompt: "Use $emmet-loop-gate-auditor to execute exactly one checkpoint-bound gate audit and then stop."
+
+policy:
+  allow_implicit_invocation: false

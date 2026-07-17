@@ -398,7 +398,7 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         return text.split(start, 1)[1].split(end, 1)[0].strip()
 
     def test_all_roles_are_explicit_one_shot_skills(self) -> None:
-        for role in ("dispatcher", "coder", "reviewer"):
+        for role in ("dispatcher", "coder", "reviewer", "gate-auditor"):
             with self.subTest(role=role):
                 directory = ROOT / ".agents" / "skills" / f"emmet-loop-{role}"
                 skill = (directory / "SKILL.md").read_text(encoding="utf-8")
@@ -443,8 +443,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         protocol = (ROOT / "docs" / "agent-loop.md").read_text(encoding="utf-8")
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         for required in (
-            ".claude/skills/{dispatcher,coder,reviewer}/",
-            ".agents/skills/emmet-loop-{dispatcher,coder,reviewer}/",
+            ".claude/skills/{dispatcher,coder,reviewer,gate-auditor}/",
+            ".agents/skills/emmet-loop-{dispatcher,coder,reviewer,gate-auditor}/",
             "`loop:blocked` 不取代 primary",
             "Reviewed-Head",
             "Reviewed-Base",
@@ -460,10 +460,12 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "operator-resolved",
             "operator-stall-reconciliation",
             "emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA>",
+            "emmet-loop:gate-auditor:audit:v1:gate=<GATE>:main=<SHA>:checkpoint=<ID>",
+            "reason=gate-audit-requested",
             "`awaiting-user`",
             "terminal bell",
             "不自動 restart component",
-            "不啟動第四個 agent",
+            "不建立或喚醒未定義的第五角色",
             "drain-and-rotate",
             "control_inputs_match",
             "rotation-state.json",
@@ -482,7 +484,7 @@ class CodexLoopSkillContractTests(unittest.TestCase):
 
     def test_cross_client_roles_share_the_bounded_context_contract(self) -> None:
         procedures = []
-        for role in ("dispatcher", "coder", "reviewer"):
+        for role in ("dispatcher", "coder", "reviewer", "gate-auditor"):
             codex = (
                 ROOT
                 / ".agents"
@@ -523,6 +525,40 @@ class CodexLoopSkillContractTests(unittest.TestCase):
                 "emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA>",
                 "`awaiting-user`",
                 "不自行移除",
+            ):
+                with self.subTest(path=path, required=required):
+                    self.assertIn(required, procedure)
+
+    def test_gate_auditor_routing_and_human_checkpoint_are_canonical(self) -> None:
+        protocol = (ROOT / "docs" / "agent-loop.md").read_text(encoding="utf-8")
+        for required in (
+            "reason=gate-audit-requested",
+            "尚無 matching audit",
+            "matching audit verdict 是 `not-ready`",
+            "matching audit verdict 是 `unknown`",
+            "matching audit verdict 是 `exit-ready`",
+            "exit-ready` 只讓流程進入 `awaiting-user`",
+            "新的 gate-exit\ncheckpoint comment",
+            "舊 audit 只保留為歷史",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, protocol)
+
+    def test_dispatcher_can_recover_from_checkpoint_bound_not_ready(self) -> None:
+        for path in (
+            ROOT / ".agents/skills/emmet-loop-dispatcher/SKILL.md",
+            ROOT / ".claude/skills/dispatcher/SKILL.md",
+        ):
+            procedure = path.read_text(encoding="utf-8")
+            for required in (
+                "`not-ready` 只 supersede",
+                "恢復或派目前 active-gate 工作",
+                "新的 checkpoint comment",
+                "新 comment ID",
+                "舊 audit",
+                "沒有 superseding `not-ready` audit",
+                "duplicate suppression",
+                "matching `exit-ready`",
             ):
                 with self.subTest(path=path, required=required):
                     self.assertIn(required, procedure)
