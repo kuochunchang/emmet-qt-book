@@ -1,7 +1,9 @@
 [metadata]
-# 所有正文都需要章首 metadata；具操作性的 front matter 必須逐一明列。
+# 所有正文、已納入 claim 級驗證的附錄與具操作性的 front matter 都需要章首 metadata；
+# 非正文文件必須逐一明列。
 # 非操作型 front matter（目前只有序章）不應為了通過檢查而虛構配套基線。
 required = [
+  "appendices/a-math-stat-foundations.md",
   "chapters/*.md",
   "front-matter/setup.md",
 ]

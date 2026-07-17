@@ -85,7 +85,7 @@
 
 ---
 
-[A. 數學與統計基礎]()
+[A. 數學與統計基礎](appendices/a-math-stat-foundations.md)
 [B. 交易損益與衍生品公式](appendices/b-trading-pnl-formulas.md)
 [C. 績效與風險指標](appendices/c-performance-risk-metrics.md)
 [D. 市場微結構](appendices/d-market-microstructure.md)
