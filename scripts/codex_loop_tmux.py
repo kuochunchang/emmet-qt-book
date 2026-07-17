@@ -937,7 +937,7 @@ def create_tmux_session(
         "-F",
         "#{pane_id}",
         "-t",
-        reviewer,
+        coder,
         "-c",
         str(runners["gate-auditor"]),
     ).stdout.strip()
@@ -950,7 +950,7 @@ def create_tmux_session(
         "-F",
         "#{pane_id}",
         "-t",
-        coder,
+        reviewer,
         "-c",
         str(runners["dispatcher"]),
     ).stdout.strip()
@@ -1262,9 +1262,9 @@ def dry_run_plan(
         panes={
             "left-top": "dispatcher",
             "left-middle": "reviewer",
-            "left-bottom": "gate-auditor",
+            "left-bottom": "events",
             "right-top": "coder",
-            "right-bottom": "events",
+            "right-bottom": "gate-auditor",
         },
         runners={role: str(path) for role, path in runners.items()},
         commands={

@@ -865,8 +865,8 @@ class CodexLoopTmuxTests(unittest.TestCase):
             [
                 ("%1", True, str(runners["coder"])),
                 ("%1", False, str(runners["reviewer"])),
-                ("%3", False, str(runners["gate-auditor"])),
-                ("%2", False, str(runners["dispatcher"])),
+                ("%2", False, str(runners["gate-auditor"])),
+                ("%3", False, str(runners["dispatcher"])),
             ],
             splits,
         )
