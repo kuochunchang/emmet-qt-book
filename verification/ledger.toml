@@ -7,6 +7,77 @@ schema_version = 2
 W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
 
 [[records]]
+id = "ch19-v030-reservation-single-ledger"
+batch = "W1"
+document = "manuscript/chapters/19-reservation-partial-fill-single-ledger.md"
+chapter = "資金預留、部分成交與唯一帳本"
+claim = "v0.3.0 的 Engine-owned AccountingLedger 是 reservation、現貨 free／locked、期貨 margin、position 與 canonical order 的唯一 writer；現貨與期貨預留會隨部分成交同比縮減並於終態釋放，逐資產守恆與 projected-copy 原子檢查防止負餘額、重複扣款與半套入帳，而 FillSimulator 在 Ledger 授權前只產生 decision、不改帳。"
+content_state = "可操作"
+data_checksums = []
+data_checksum_note = "不適用：本項使用程式內固定 Decimal 訂單、餘額、費率、成交與已發布聚焦測試，不載入或保存市場資料集。"
+formal_entrypoints = [
+  "quant.common.engine.AccountingLedger.reserve",
+  "quant.common.engine.AccountingLedger.authorize_and_apply_fill",
+  "quant.common.engine.AccountingLedger.apply_order_event",
+  "quant.common.engine.AccountingLedger.snapshot／reservations",
+  "quant.common.fill.FillSimulator.propose_next",
+]
+schemas = [
+  "quant.common.engine.Reservation／FillRecord",
+  "quant.common.models.account.Balance／SpotWallet／FuturesWallet／AccountState",
+  "quant.common.fill.FillDecision",
+  "quant.common.models.orders.Order／OrderUpdate",
+]
+interface_note = "已發布 Python 模型與 Phase 3 harness 可重現本地 reservation／會計責任順序；它們不是正式讀者回測 CLI、交易所 connector、live account、資金費或強平操作入口。"
+evidence_refs = [
+  "book:manuscript/chapters/19-reservation-partial-fill-single-ledger.md",
+  "book:manuscript/appendices/d-market-microstructure.md",
+  "book:manuscript/assets/ch19-reservation-ledger-oracle.py",
+  "repo:emmet-qt-bt1:src/quant/common/engine/accounting.py",
+  "repo:emmet-qt-bt1:src/quant/common/execution/backtest.py",
+  "repo:emmet-qt-bt1:src/quant/common/fill/simulator.py",
+  "repo:emmet-qt-bt1:src/quant/common/models/account.py",
+  "repo:emmet-qt-bt1:tests/unit/test_engine_accounting.py",
+  "repo:emmet-qt-bt1:tests/unit/test_execution_backtest.py",
+  "repo:emmet-qt-bt1:docs/quantitative-trading-system-design.md",
+  "repo:emmet-qt-bt1:docs/design/step-3b-fill-execution.md",
+]
+verification_commands = [
+  "uv lock --check",
+  "uv sync --locked --dev",
+  "uv run python --version",
+  "uv run pytest tests/unit/test_engine_accounting.py::TestReservations tests/unit/test_engine_accounting.py::TestCanonicalOrderState tests/unit/test_engine_accounting.py::TestSpotFills tests/unit/test_engine_accounting.py::test_spot_buy_conserves_each_asset_and_clears_terminal_reservation tests/unit/test_execution_backtest.py -q",
+  "uv run python \"$BOOK_DIR/manuscript/assets/ch19-reservation-ledger-oracle.py\"",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "Python 3.12.3",
+  "46 passed",
+  "spot-admit=USDT-free:800,locked:200,reservation:200",
+  "spot-partial=qty:1@90,fee:0.01BTC,USDT-free:810,locked:100,BTC-free:0.99,reservation-qty:1,amount:100",
+  "spot-cancel=USDT-free:910,locked:0,BTC-free:0.99,reservations:0",
+  "spot-conservation=USDT-total:910,BTC-total:0.99,PASS",
+  "futures-admit=qty:2@100,leverage:10,fee-rate:0.001,reservation:20.200",
+  "futures-partial-cancel=remaining-qty:1,reservation-before-cancel:10.100,reservation-after-cancel:0",
+  "simulator-ledger-boundary=decision-only,ledger-unchanged:true",
+  "chapter-19-reservation-ledger-oracle=PASS",
+]
+result = "pass"
+observed = "tag 與 HEAD 固定且 worktree 乾淨；Python 3.12.3；reservation、canonical order、現貨 fill、逐資產 property 與 execution responsibility 聚焦測試 46 passed；helper 逐步核對現貨 200 預留、90 實際成本、10 price improvement、100 剩餘 lock、取消後 USDT 910／BTC 0.99 守恆，期貨 20.200→10.100→0 的 reservation trace，以及 simulator decision 前後 Ledger snapshot 與 reservations 不變。"
+known_differences = [
+  "固定現貨與期貨數字是教學 oracle，不支持目前交易所餘額、私人 fee tier、即時 margin、訂單或成交宣稱。",
+  "Phase 3 已發布本地 Python 會計服務與 harness，但完整 Trading Engine、正式回測 CLI、Paper／Testnet／Live execution 與 reconciliation 尚未作為本章讀者入口。",
+  "資金費、mark-to-market、isolated／cross 強平、deficit 與連帶撤單由第 20 章續接，不在本 claim。",
+]
+verified_on = "2026-07-17"
+revalidation_triggers = [
+  "AccountingLedger、Reservation、Balance、AccountState、FillSimulator 或 execution accounting responsibility 語義改變",
+  "固定 helper 輸入／輸出、測試數量、PASS marker、reservation 公式、fee asset 或守恆決定改變",
+  "配套基線 tag／commit 或 Chapter 19 內容狀態改變",
+]
+
+[[records]]
 id = "ch18-v030-bar-matching-assumptions"
 batch = "W1"
 document = "manuscript/chapters/18-backtest-matching-is-not-exchange.md"
