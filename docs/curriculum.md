@@ -601,16 +601,20 @@ GitHub Issues 記錄即時完成狀態。三者不一致時採較嚴格限制，
 
 > 目前唯一啟用的寫作批次：W1
 >
-> 目前 active gate：`W1-G4`
+> 目前 active gate：`W1-final`
 >
 > 最後核准日期：2026-07-17
 >
-> 核准來源：使用者明確指示；追蹤 Issue #82
+> 核准來源：使用者明確指示；追蹤 Issue #96
 >
-> 前一 gate 完成證據：`W1-G3` — Issue #4；第 10 章 PR #70 @ `357c9fd`、
-> 第 11 章 PR #74 @ `5bf7d7c`、第 12 章 PR #78 @ `645694e`、第 13 章 PR #79 @
-> `166a722`、第 14 章 PR #80 @ `ab780b2`、第 15 章 PR #81 @ `2ffb6d6`；
-> 詳細驗證：Meta Issue #1 的 W1-G3 Dispatcher 退出證據留言 #4992215685
+> 前一 gate 完成證據：`W1-G4` — Issue #5；第 16 章 PR #84 @
+> `00aaaae94b6b40f27bd90cf4899785c0a3afb43a`、第 17 章 PR #85 @
+> `187b1b1d3fb9ebb562df24d1da7cd9ba95bfe029`、第 18 章 PR #86 @
+> `33524fb0bac80f0c5cc5b73c97adc49a7a3292b2`、第 19 章 PR #88 @
+> `39ce1f52e44e122cecde08272322e4002e3aa64d`、第 20 章 PR #89 @
+> `c964d3383d3c0af578fd600007a75bb0458b70f2`；詳細驗證：Meta Issue #1 的
+> W1-G4 Dispatcher checkpoint #5001173738 與 Gate Auditor `exit-ready` 稽核
+> #5001302856
 
 只有 default branch `main` 已合併的 active gate 宣告有效；feature branch、舊分支
 或未合併 PR 中的 gate 文字都只是提案，不能解鎖新工作。
@@ -632,10 +636,10 @@ W1 依下列 gate 前進。前一 gate 的退出條件尚未在 `main` 留下可
 | `W1-G4` 執行會計 | Issue #5，第 16–20 章；Issue #6 相關附錄小節；Issue #7 對應章節台帳 | `W1-G3` 完成 | #5 關閉；相關附錄、微型交易帳本、撮合假設與台帳完成逐筆核對 |
 | `W1-final` 階段驗收 | Issue #6 尚未隨正文完成的 W1 附錄；Issue #7 全章驗證與新手試讀 | `W1-G0`–`W1-G4` 全部完成 | #6、#7 關閉；W1 Milestone 有 book check、驗證台帳與試讀證據 |
 
-Issue #6 是隨正文進展的平行工作：只補充目前 active gate 需要的附錄小節，不得
-脫離正文一次預寫全部附錄，也不能以附錄工作繞過下一 gate 的進入條件。
-Issue #7 同樣貫穿 W1：G0 建立骨架，G1–G4 隨章更新，僅在 `W1-final` 完成新手
-試讀與全章驗證後關閉。
+Issue #6 在 G1–G4 是隨正文進展的平行工作，只補充 active 正文直接需要的附錄；
+進入 `W1-final` 後才完成尚未隨正文交付的 W1 附錄，不得藉此預寫後續批次內容。
+Issue #7 同樣貫穿 W1：G0 建立骨架，G1–G4 隨章更新，並在目前 `W1-final` 執行
+新手試讀與全章驗證；只有全部退出證據成立時才能關閉 #6、#7 與 W1 Milestone。
 
 以下限制在 W1 全程有效：
 
