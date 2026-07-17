@@ -587,6 +587,11 @@ Gate Auditor 也保留唯讀 one-shot fallback：
 改變時，正常路徑會自動顯示 `draining`／`rotating`，完成後從 GitHub durable
 state 恢復，不需人工先改 label 或重送事件。
 
+Handoff 期間 event manager 會繼續持有 `events` lock，直到 detached rotator 已驗證
+parent PID／lock 並以 matching PID 寫入 `waiting-for-manager` ACK。Manager 收到 ACK 後
+才退出並釋放 lock；rotator 隨後停止 components。ACK 前 rotator 退出或逾時會被停止並
+記為 `rotation.state=failed`，不得靠排程競速或重複 spawn 繞過 parent identity 驗證。
+
 Launcher 會把目前 `--output-format` 傳給 event manager 與 detached rotator，因此
 後續的自動換代不會意外從 pretty 切回 JSONL，或反向切換。Renderer 程式本身
 屬 control inputs；它在 `main` 改變時也必須走相同 drain-and-rotate。Pretty

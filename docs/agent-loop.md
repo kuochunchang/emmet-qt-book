@@ -29,7 +29,9 @@ Trusted runner、event-driven CLI 與手動單輪診斷的操作者步驟見
   派送；有 child 先 drain，idle 後交給 launcher-owned detached rotator。Rotator 必須
   驗證 events PID／lock、session ownership、same-repo 與乾淨 worktrees，停止
   components 後才同步 dedicated launcher control worktree 與四個 runners，並由新
-  generation 執行五項 preflight 與重建 session。
+  generation 執行五項 preflight 與重建 session。Manager 必須持續持有 `events` lock，
+  直到 rotator 以 matching PID 寫入 `waiting-for-manager` ACK；只有 ACK 後才釋放 lock
+  讓 rotator 繼續，handoff failure／timeout 一律停止 rotator 並 fail closed。
 - GitHub Issue、PR、label、署名留言與 commit SHA 是 durable state；本機 session
   與 worktree 都可能中斷，下一輪必須先 reconciliation 才能開始新工作。Unix socket、
   event fingerprint 與 manager 記憶體中的 retry 狀態都不是 durable workflow state。

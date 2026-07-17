@@ -10,7 +10,7 @@ import tempfile
 import textwrap
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts.codex_loop_runtime import (
     agent_event_pane_status,
@@ -32,12 +32,14 @@ from scripts.codex_loop_runtime import (
     pull_request_disappearance_decision,
     pull_request_disappeared,
     read_agent_states,
+    read_rotation_state,
     rotation_state_path,
     run_events,
     select_poll_decisions,
     socket_path,
     transition_operator_alert,
     update_pane_title,
+    wait_for_control_rotation_handoff,
     write_rotation_state,
     workflow_state_fingerprint,
     parser as runtime_parser,
@@ -395,6 +397,40 @@ class ControlRotationTests(unittest.TestCase):
             self.assertEqual("a" * 40, payload["target_main"])
             self.assertEqual(0o600, path.stat().st_mode & 0o777)
             self.assertEqual([], list(runtime_dir.glob("*.tmp")))
+
+    def test_parent_holds_events_lock_until_rotator_acknowledges(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = rotation_state_path(Path(temporary))
+            process = Mock(pid=4321)
+            process.poll.return_value = None
+            write_rotation_state(
+                path,
+                state="waiting-for-manager",
+                rotator_pid=4321,
+            )
+
+            wait_for_control_rotation_handoff(process, path)
+
+            process.poll.assert_not_called()
+            process.terminate.assert_not_called()
+
+    def test_handoff_timeout_stops_rotator_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = rotation_state_path(Path(temporary))
+            process = Mock(pid=4321)
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            write_rotation_state(path, state="requested")
+
+            with self.assertRaisesRegex(ValueError, "handoff timeout"):
+                wait_for_control_rotation_handoff(
+                    process,
+                    path,
+                    timeout_seconds=0.001,
+                )
+
+            process.terminate.assert_called_once_with()
+            self.assertEqual("failed", read_rotation_state(path)["state"])
 
 
 class EventRoutingTests(unittest.TestCase):
@@ -2811,13 +2847,20 @@ class AgentRuntimeTests(unittest.TestCase):
             ),
             patch(
                 "scripts.codex_loop_runtime.start_control_rotation",
-                return_value=4321,
             ) as rotate,
+            patch(
+                "scripts.codex_loop_runtime.wait_for_control_rotation_handoff",
+            ) as wait_handoff,
             patch("scripts.codex_loop_runtime.notify_agent") as notify,
         ):
+            rotate.return_value.pid = 4321
             self.assertEqual(0, run_events(options))
 
         rotate.assert_called_once()
+        wait_handoff.assert_called_once_with(
+            rotate.return_value,
+            rotation_state_path(self.runtime_dir),
+        )
         notify.assert_not_called()
 
     def test_event_manager_drains_busy_control_drift_without_rotation(

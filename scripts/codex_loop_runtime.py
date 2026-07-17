@@ -59,6 +59,7 @@ META_ACTIVE_GATE_PATTERN = re.compile(
 DISPATCHER_SIGNATURE = "— Dispatcher"
 GATE_AUDITOR_SIGNATURE = "— Gate Auditor"
 ROTATION_STATE_FILENAME = "rotation-state.json"
+ROTATION_HANDOFF_TIMEOUT_SECONDS = 10.0
 EVENT_QUERY = """
 query EmmetLoopState($owner: String!, $name: String!, $search: String!) {
   repository(owner: $owner, name: $name) {
@@ -2447,6 +2448,73 @@ def write_rotation_state(
     temporary.replace(path)
 
 
+def read_rotation_state(path: Path) -> dict[str, object]:
+    """Read one local rotation snapshot without treating partial data as ready."""
+
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def wait_for_control_rotation_handoff(
+    process: subprocess.Popen[bytes],
+    state_path: Path,
+    *,
+    timeout_seconds: float = ROTATION_HANDOFF_TIMEOUT_SECONDS,
+) -> None:
+    """Keep the events lock until the rotator verifies its parent and ACKs."""
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        state = read_rotation_state(state_path)
+        rotation_state = state.get("state")
+        if (
+            rotation_state == "waiting-for-manager"
+            and state.get("rotator_pid") == process.pid
+        ):
+            return
+        if rotation_state == "failed":
+            detail = str(state.get("detail") or "detached rotator 啟動失敗")
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            raise ValueError(f"control rotation handoff 失敗：{detail}")
+        return_code = process.poll()
+        if return_code is not None:
+            raise ValueError(
+                "control rotation handoff 前 rotator 已退出："
+                f"exit={return_code}"
+            )
+        time.sleep(0.05)
+
+    detail = "control rotation handoff timeout"
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    state = read_rotation_state(state_path)
+    state.pop("updated_at", None)
+    state.update(
+        {
+            "state": "failed",
+            "rotator_pid": process.pid,
+            "detail": detail,
+        }
+    )
+    write_rotation_state(state_path, **state)
+    raise ValueError(detail)
+
+
 def control_rotation_status(
     snapshot: Mapping[str, object],
     *,
@@ -2497,8 +2565,8 @@ def start_control_rotation(
     common_dir: Path,
     snapshot: Mapping[str, object],
     changes: Sequence[str],
-) -> int:
-    """Spawn the local-only rotator and return without mutating GitHub state."""
+) -> subprocess.Popen[bytes]:
+    """Spawn the local-only rotator without mutating GitHub state."""
 
     control_root = adapter.REPOSITORY_ROOT.resolve()
     launcher = control_root / "scripts" / "codex_loop_tmux.py"
@@ -2571,7 +2639,7 @@ def start_control_rotation(
             detail=str(error),
         )
         raise ValueError(f"無法啟動 detached rotator：{error}") from error
-    return process.pid
+    return process
 
 
 def _validate_manager_workdir(workdir: Path) -> tuple[Path, Path]:
@@ -2734,17 +2802,21 @@ def run_events(options: argparse.Namespace) -> int:
                             changed_control_paths=control_changes,
                         )
                         break
-                    rotator_pid = start_control_rotation(
+                    rotator = start_control_rotation(
                         options,
                         runtime_dir=runtime_dir,
                         common_dir=common_dir,
                         snapshot=snapshot,
                         changes=control_changes,
                     )
+                    wait_for_control_rotation_handoff(
+                        rotator,
+                        rotation_state_path(runtime_dir),
+                    )
                     emit(
                         component="events",
                         result="rotation-handoff",
-                        rotator_pid=rotator_pid,
+                        rotator_pid=rotator.pid,
                         changed_control_paths=control_changes,
                     )
                     set_title("換代：handoff 完成")
