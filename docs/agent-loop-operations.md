@@ -195,6 +195,54 @@ Agent child 成功結束後標題回到 `等待事件`；非零 exit 或 timeout
 tmux 邊框會自動附加 `[已退出]`。Pane title 是易讀的即時摘要，不是 durable state；
 跨重啟仍以 GitHub Issue、PR、label、留言與完整 SHA 為準。
 
+### 右上角：Gate Auditor 結果卡
+
+Gate Auditor 完成一輪後，最後一則 agent message 會是固定結果卡，而不是只顯示
+`verdict=exit-ready` 等機器欄位；其後仍可能出現 `turn completed` 與
+`iteration-finished` lifecycle 記錄。先讀 `判定`、`Gate`、`問題` 與`下一步`，再依需要
+開啟證據留言。下列是格式範例，不代表目前 live gate：
+
+```text
+Gate Auditor
+判定：等待你決定
+Gate：目前 <active>；稽核 <active>；後繼 <successor>（未生效）
+問題：無
+下一步（使用者）：決定是否啟動 transition；核准前停在 checkpoint。
+本輪：已發佈 Meta #1 audit；只新增 report，未改 gate／label／PR／檔案
+有效：檢查時 main@<12字元 SHA>；at=<ISO 8601 時間>
+診斷：published / exit-ready / meta-comment-only / cache=git-fetch
+證據：Meta #1 comment #<AUDIT_COMMENT_ID>（checkpoint #<CHECKPOINT_ID>）：<immutable permalink>
+```
+
+除 evidence permalink 可由 terminal 自行換行外，卡片每個 logical line 最多 80 個顯示
+格；問題第一項最多 52 格，下一步最多 60 格，CJK 寬字以兩格計。
+
+結果卡把 verdict、iteration outcome 與 freshness 分開：
+
+- `尚未就緒`：至少一個退出條件明確失敗；看「問題」與 dispatcher 的最小恢復動作，
+  不要核准 transition。
+- `無法判定（安全停止）`：必要證據缺失、矛盾或無法綁定；先解決列出的 gap 並重跑
+  fresh audit，之前不可 transition。
+- `未稽核（安全停止）`：沒有完成 current-snapshot audit；從「本輪」與「問題」讀取
+  stale、precondition 或 transport／snapshot 不完整的確切原因。
+- `本輪不適用`：合法稽核已觀察到 transition state；沒有新增三選一 audit marker，交由
+  使用者核對固定 transition 流程。
+- `本輪：沿用既有 report，未重貼`：同一 gate／main／checkpoint 已有 durable report；
+  「判定」仍顯示該 report 的真正 verdict，不會被 no-op 狀態蓋掉。
+- `本輪：發佈結果未知`：不得假設有留言，也不得盲目重貼；恢復 GitHub 查詢後先搜尋
+  exact marker。此時診斷的第二、三欄固定是 `none / unknown`。
+- `無 durable 判定（report 未發佈）`：稽核已計算但 publication 明確失敗；「問題」若附
+  `computed=<verdict>` 也只供除錯，不可沿用為 gate 判定。
+
+`有效：過期` 會並列 bound 與 current 的短 SHA；即使舊 report 是 `exit-ready` 也
+無效。不要直接建新 checkpoint：Dispatcher 先對 current main reconciliation，重驗
+zero WIP、三方 gate 與退出證據；全部仍成立才建 fresh checkpoint 並重新稽核。
+
+這張卡是 audit-time snapshot，不會在 main 日後移動時回頭改寫。要知道「此刻」是否仍
+有效，對照右下角 Events pane 的 current `operator-status`。若 Events 顯示不同 main、
+重新建立 checkpoint、
+新的 WIP 或 blocking 狀態，以 Events 與 GitHub durable state 為準，舊卡只保留為歷史。
+
 ### 右下角：流程健康與下一步
 
 先看右下角 pane title 判斷正常、暫停、停滯或阻斷；需要原因與恢復條件時，再看

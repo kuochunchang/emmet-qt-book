@@ -823,6 +823,18 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "emmet-loop:dispatcher:gate-exit:<GATE>:main=<MAIN_SHA>",
             "emmet-loop:gate-auditor:audit:v1:gate=<GATE>:main=<SHA>:checkpoint=<ID>",
             "reason=gate-audit-requested",
+            "窄版「Gate Auditor」結果卡",
+            "audit-time snapshot",
+            "result=stale-snapshot-no-publish",
+            "result=publication-state-unknown",
+            "mutations=unknown",
+            "`manual-diagnostic-no-publish` 與 `invalid-wake-no-publish`",
+            "只有 matching audit 可投影既有 durable verdict",
+            "heading 表示 role",
+            "`head_sha=none`",
+            "不得為滿足 generic 摘要再追加一段 machine sentinel",
+            "`evidence-incomplete-no-publish` 只用於 transport／pagination",
+            "必須發佈 durable `verdict=unknown`",
             "`awaiting-user`",
             "terminal bell",
             "不自動 restart component",
@@ -842,6 +854,31 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         self.assertIn(".agents/skills/", agents)
         self.assertIn("不安裝或啟用主機 scheduler", agents)
         self.assertIn("dedicated `*-loop-control` worktree", agents)
+
+    def test_operations_explains_gate_auditor_card_and_staleness(self) -> None:
+        operations = (ROOT / "docs" / "agent-loop-operations.md").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "### 右上角：Gate Auditor 結果卡",
+            "判定：等待你決定",
+            "Gate：目前 <active>",
+            "問題：無",
+            "下一步（使用者）",
+            "診斷：published / exit-ready",
+            "<AUDIT_COMMENT_ID>",
+            "<CHECKPOINT_ID>",
+            "immutable permalink",
+            "`有效：過期`",
+            "舊 report 是 `exit-ready` 也",
+            "Dispatcher 先對 current main reconciliation",
+            "全部仍成立才建 fresh checkpoint",
+            "第二、三欄固定是 `none / unknown`",
+            "audit-time snapshot",
+            "右下角 Events pane 的 current `operator-status`",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, operations)
 
     def test_cross_client_roles_share_the_bounded_context_contract(self) -> None:
         procedures = []

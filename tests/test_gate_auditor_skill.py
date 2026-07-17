@@ -214,6 +214,205 @@ class LoopGateAuditorSkillContractTests(unittest.TestCase):
                 with self.subTest(required=required):
                     self.assertIn(required, contract)
 
+    def test_published_report_starts_with_an_operator_summary(self) -> None:
+        for contract in (self.skill, self.claude):
+            for required in (
+                "## 操作者摘要",
+                "不要求他從完整表格自行",
+                "`判定`：`exit-ready` 寫「等待你決定」",
+                "`影響`：明寫 active gate 仍未改變",
+                "successor 尚未生效",
+                "main 一變更即失效",
+                "治理／snapshot／freshness、curriculum 原順序",
+                "checkpoint、transition／publication 的固定順序",
+                "操作者摘要之後才放固定欄位與所有表格",
+                "不是另一個 verdict 或授權來源",
+            ):
+                with self.subTest(required=required):
+                    self.assertIn(required, contract)
+            self.assertRegex(
+                contract,
+                r"完整 blockers 仍\s+全部保留在後文",
+            )
+
+    def test_terminal_handoff_is_human_first_and_snapshot_bounded(self) -> None:
+        for contract in (self.skill, self.claude):
+            section = contract.split("## 結尾的操作者交接", 1)[1]
+            template_match = re.search(
+                r"```text\n(Gate Auditor\n.*?)\n```",
+                section,
+                flags=re.DOTALL,
+            )
+            self.assertIsNotNone(template_match)
+            lines = template_match.group(1).splitlines()
+            self.assertEqual(9, len(lines))
+            prefixes = (
+                "Gate Auditor",
+                "判定：",
+                "Gate：",
+                "問題：",
+                "下一步（",
+                "本輪：",
+                "有效：",
+                "診斷：",
+                "證據：",
+            )
+            for line, prefix in zip(lines, prefixes, strict=True):
+                with self.subTest(prefix=prefix):
+                    self.assertTrue(line.startswith(prefix), line)
+            for required in (
+                "## 結尾的操作者交接",
+                "--body-file -",
+                "不得使用 inline `--body`",
+                "至多九個 logical lines",
+                "問題：<無|N 項；第一項 [ID] <至多 52 terminal display cells>>",
+                "至多 60 terminal display cells 的唯一最小安全動作",
+                "每個 logical line 最多 80 terminal display cells",
+                "寬字元按兩格計算",
+                "卡片只用 12 字元 SHA",
+                "不能拿 `audit_time` 猜填",
+                "不宣稱 publication 後仍 current",
+                "診斷：<result>",
+                "cache=<none|git-fetch>",
+                "immutable permalink",
+                "<AUDIT_COMMENT_ID>",
+                "<CHECKPOINT_ID>",
+            ):
+                with self.subTest(required=required):
+                    self.assertIn(required, contract)
+            self.assertNotIn("Gate：<audited gate> →", section)
+            self.assertNotIn("；audit@<12>", section)
+            self.assertNotIn("技術摘要：role=gate-auditor", section)
+
+    def test_terminal_handoff_maps_verdicts_and_noop_without_new_state(self) -> None:
+        for contract in (self.skill, self.claude):
+            section = contract.split("## 結尾的操作者交接", 1)[1]
+            for required in (
+                "`exit-ready` →「等待你決定」",
+                "`not-ready` →「尚未就緒」",
+                "`unknown` →「無法判定（安全停止）」",
+                "owner=`使用者`",
+                "owner=`Dispatcher`",
+                "`matching-audit-no-op`",
+                "`stale-snapshot-no-publish`",
+                "`precondition-failed-no-publish`",
+                "`evidence-incomplete-no-publish`",
+                "`invalid-gate-audit-state`",
+                "`publication-failed-no-publish`",
+                "無 durable 判定／`none`",
+                "`publication-state-unknown`",
+                "`manual-diagnostic-no-publish`",
+                "`invalid-wake-no-publish`",
+                "computed=<verdict>",
+                "不得放入 `verdict` 冒充 durable audit",
+            ):
+                with self.subTest(required=required):
+                    self.assertIn(required, contract)
+            self.assertRegex(
+                section,
+                r"iteration outcome，不得\s+加入 marker 的三種 verdict taxonomy",
+            )
+            result_rows = {
+                line.split("|")[2].strip().strip("`")
+                for line in section.splitlines()
+                if line.startswith("|") and line.count("|") == 7
+            }
+            result_rows.discard("result")
+            result_rows.discard("---")
+            self.assertEqual(
+                {
+                    "published",
+                    "matching-audit-no-op",
+                    "stale-snapshot-no-publish",
+                    "precondition-failed-no-publish",
+                    "evidence-incomplete-no-publish",
+                    "invalid-gate-audit-state",
+                    "publication-failed-no-publish",
+                    "publication-state-unknown",
+                    "manual-diagnostic-no-publish",
+                    "invalid-wake-no-publish",
+                },
+                result_rows,
+            )
+            matrix = {}
+            for line in section.splitlines():
+                if not line.startswith("|") or line.count("|") != 7:
+                    continue
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                result = cells[1].strip("`")
+                if result not in {"result", "---"}:
+                    matrix[result] = tuple(cells[2:])
+            self.assertEqual(
+                (
+                    "依本輪 verdict／該 verdict",
+                    "已發佈／`meta-comment-only`",
+                    "檢查時有效；新 permalink",
+                    "依 verdict",
+                ),
+                matrix["published"],
+            )
+            self.assertEqual(
+                (
+                    "依既有 verdict／既有 verdict",
+                    "沿用、未重貼／`none`",
+                    "檢查時有效；既有 permalink",
+                    "依既有 verdict",
+                ),
+                matrix["matching-audit-no-op"],
+            )
+            self.assertEqual(
+                (
+                    "未稽核／`none`",
+                    "未發佈／`none`",
+                    "stale；舊 link 僅標「已過期」",
+                    "`Dispatcher`",
+                ),
+                matrix["stale-snapshot-no-publish"],
+            )
+            self.assertEqual(
+                (
+                    "無法判定／`none`",
+                    "發佈結果未知／`unknown`",
+                    "unknown；不得宣稱有 report",
+                    "`使用者`",
+                ),
+                matrix["publication-state-unknown"],
+            )
+
+    def test_incomplete_transport_and_durable_unknown_are_distinct(self) -> None:
+        for contract in (self.skill, self.claude):
+            for required in (
+                "來源 transport／pagination、live query 或 snapshot completeness",
+                "`evidence-incomplete-no-publish` 並令 `verdict=none`",
+                "若 snapshot 已完整",
+                "必須發佈 `verdict=unknown`",
+            ):
+                with self.subTest(required=required):
+                    self.assertIn(required, contract)
+            self.assertRegex(
+                contract,
+                r"不得用\s+no-publish 逃避 durable unknown blocker",
+            )
+
+    def test_stale_and_ambiguous_publication_fail_closed(self) -> None:
+        for contract in (self.skill, self.claude):
+            for required in (
+                "重驗 zero WIP",
+                "三方 gate 與退出證據",
+                "全部仍成立時才能建立 fresh checkpoint",
+                "再由 Gate Auditor 獨立",
+                "恢復查詢後先搜尋 exact marker",
+                "不得盲目重貼",
+                "狀態仍不明必須寫",
+                "`mutations=unknown`",
+                "沒有嘗試 publication、matching no-op",
+                "重查已確認 marker 不存在，才可寫 `mutations=none`",
+                "local_cache_refresh",
+                "手動／非法 wake 的 cache 固定 `none`",
+            ):
+                with self.subTest(required=required):
+                    self.assertIn(required, contract)
+
     def test_claude_role_has_the_same_publish_boundary(self) -> None:
         for required in (
             "reason=gate-audit-requested",

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -208,6 +209,88 @@ class PrettyOutputTests(unittest.TestCase):
         self.assertIn("warning red", stderr.getvalue())
         self.assertNotIn("\x1b", stderr.getvalue())
         self.assertNotIn("\r", stderr.getvalue())
+
+    def test_gate_auditor_operator_card_is_readable_and_lossless(self) -> None:
+        renderer, stdout, _ = self.renderer("gate-auditor")
+        card = (
+            "Gate Auditor\n"
+            "判定：等待你決定\n"
+            "Gate：目前 <active>；稽核 <active>；後繼 <successor>（未生效）\n"
+            "問題：無\n"
+            "下一步（使用者）：決定是否啟動 transition。\n"
+            "本輪：已發佈 Meta #1 audit；只新增 report，active gate 未變\n"
+            "有效：檢查時 main@123456789abc；at=2026-07-17T18:45:30+08:00\n"
+            "診斷：published / exit-ready / "
+            "meta-comment-only / cache=git-fetch\n"
+            "證據：https://example.test/issues/1#issuecomment-42"
+        )
+        self.assertEqual(9, len(card.splitlines()))
+
+        def display_cells(value: str) -> int:
+            return sum(
+                0
+                if unicodedata.combining(character)
+                else 2
+                if unicodedata.east_asian_width(character) in {"F", "W"}
+                else 1
+                for character in value
+            )
+
+        for line in card.splitlines()[:-1]:
+            with self.subTest(line=line):
+                self.assertLessEqual(display_cells(line), 80)
+        stale_validity = (
+            "有效：過期；bound@123456789abc≠current@abcdef123456；勿沿用"
+        )
+        self.assertLessEqual(display_cells(stale_validity), 80)
+        child_event = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": card},
+        }
+        child_bytes = (json.dumps(child_event, ensure_ascii=False) + "\n").encode(
+            "utf-8"
+        )
+
+        renderer.feed_stdout(child_bytes)
+        renderer.close()
+
+        assert renderer.raw_stdout_path is not None
+        self.assertEqual(child_bytes, renderer.raw_stdout_path.read_bytes())
+        display = stdout.getvalue()
+        self.assertIn("agent:\n  Gate Auditor", display)
+        self.assertIn("  判定：等待你決定", display)
+        self.assertIn("  問題：無", display)
+        self.assertIn("  下一步（使用者）：決定是否啟動 transition。", display)
+        self.assertIn("  診斷：published / exit-ready", display)
+        self.assertIn("  證據：https://example.test", display)
+        self.assertNotIn("item.completed", display)
+
+    def test_gate_auditor_stdin_publish_command_does_not_echo_body(self) -> None:
+        renderer, stdout, _ = self.renderer("gate-auditor")
+        report_body = "PRIVATE FULL GATE AUDIT TABLE"
+        command_event = {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": "gh issue comment 1 --body-file -",
+                "exit_code": 0,
+                "aggregated_output": (
+                    "https://example.test/issues/1#issuecomment-42\n"
+                ),
+            },
+        }
+        command_bytes = (
+            json.dumps(command_event, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
+
+        renderer.feed_stdout(command_bytes)
+        renderer.close()
+
+        display = stdout.getvalue()
+        self.assertIn("gh issue comment 1 --body-file -", display)
+        self.assertIn("issuecomment-42", display)
+        self.assertNotIn(report_body, display)
+        self.assertNotIn("--body ", display)
 
     def test_private_generation_paths_and_permissions(self) -> None:
         first, _, _ = self.renderer("gate-auditor")
