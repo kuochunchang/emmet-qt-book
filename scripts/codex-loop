@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "${1:-}" == "tmux" ]]; then
   shift
   exec python3 "$ROOT/scripts/codex_loop_tmux.py" "$@"
-elif [[ "${1:-}" == "agent" || "${1:-}" == "events" ]]; then
+elif [[ "${1:-}" == "agent" || "${1:-}" == "events" || "${1:-}" == "inspect-event" ]]; then
   exec python3 "$ROOT/scripts/codex_loop_runtime.py" "$@"
 fi
 exec python3 "$ROOT/scripts/codex_loop.py" "$@"

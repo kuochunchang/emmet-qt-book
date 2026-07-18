@@ -206,15 +206,14 @@ class CodexLoopAdapterTests(unittest.TestCase):
         self.assertNotIn("model_reasoning_effort", joined)
         self.assertNotIn("model_verbosity", joined)
 
-    def test_gate_auditor_prompt_requires_live_stdin_transport(self) -> None:
+    def test_gate_auditor_prompt_requires_file_backed_transport(self) -> None:
         command = build_command(
             "gate-auditor", Path("/tmp/gate-auditor"), "/usr/bin/codex"
         )
 
-        self.assertIn("do not launch a bare --body-file -", command[-1])
-        self.assertIn("live PTY session with echo disabled", command[-1])
-        self.assertIn("follow-up stdin", command[-1])
-        self.assertIn("terminate it with EOF", command[-1])
+        self.assertIn("mode-0600 report file under /tmp", command[-1])
+        self.assertIn("gh issue comment --body-file", command[-1])
+        self.assertIn("Never use --body-file -", command[-1])
 
         dispatcher = build_command(
             "dispatcher", Path("/tmp/dispatcher"), "/usr/bin/codex"
@@ -223,9 +222,10 @@ class CodexLoopAdapterTests(unittest.TestCase):
 
     def test_repo_defaults_bound_each_role_without_a_profile(self) -> None:
         expected = {
-            "dispatcher": ("gpt-5.6-sol", "high"),
+            "dispatcher": ("gpt-5.6-luna", "medium"),
             "coder": ("gpt-5.6-sol", "high"),
             "reviewer": ("gpt-5.6-sol", "xhigh"),
+            "gate-auditor": ("gpt-5.6-terra", "high"),
         }
         for role, (model, effort) in expected.items():
             with self.subTest(role=role):
@@ -802,7 +802,7 @@ class CodexLoopSkillContractTests(unittest.TestCase):
         self.assertTrue(mode & stat.S_IXUSR)
 
     def test_public_wrapper_exposes_runtime_and_tmux_components(self) -> None:
-        for component in ("agent", "events", "tmux"):
+        for component in ("agent", "events", "inspect-event", "tmux"):
             with self.subTest(component=component):
                 completed = subprocess.run(
                     [str(ADAPTER), component, "--help"],
@@ -847,7 +847,7 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "只有 matching audit 可投影既有 durable verdict",
             "heading 表示 role",
             "`head_sha=none`",
-            "不得為滿足 generic 摘要再追加一段 machine sentinel",
+            "卡片後仍必須以單行 `LOOP_OUTCOME` 結束",
             "`evidence-incomplete-no-publish` 只用於 transport／pagination",
             "必須發佈 durable `verdict=unknown`",
             "`awaiting-user`",
@@ -889,10 +889,10 @@ class CodexLoopSkillContractTests(unittest.TestCase):
             "Dispatcher 先對 current main reconciliation",
             "全部仍成立才建 fresh checkpoint",
             "第二、三欄固定是 `none / unknown`",
-            "interactive PTY／session",
-            "follow-up",
-            "`write_stdin`",
-            "送 EOF",
+            "mode `0600` report",
+            "`--body-file`",
+            "完成後刪除",
+            "不得改用 inline body、stdin",
             "audit-time snapshot",
             "右下角 Events pane 的 current `operator-status`",
         ):
@@ -921,6 +921,8 @@ class CodexLoopSkillContractTests(unittest.TestCase):
                         "不是授權",
                         "mutation 前",
                         "compact summary",
+                        "LOOP_OUTCOME",
+                        "禁止直接掃描 runtime raw",
                         "預設禁止完整 comments/history",
                     ):
                         self.assertIn(required, contract)

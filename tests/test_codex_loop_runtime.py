@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -13,7 +15,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.codex_loop_runtime import (
+    IterationCapture,
     agent_event_pane_status,
+    apply_trusted_gate,
+    apply_usage_budget,
     build_alert_escalation,
     build_event,
     build_operator_alert,
@@ -21,6 +26,7 @@ from scripts.codex_loop_runtime import (
     classify_snapshot,
     command_with_event_context,
     control_rotation_status,
+    daily_token_usage,
     describe_operator_status,
     detect_stalled_iteration,
     duplicate_delivery_is_suppressed,
@@ -35,6 +41,7 @@ from scripts.codex_loop_runtime import (
     read_rotation_state,
     rotation_state_path,
     run_events,
+    run_inspect_event,
     select_poll_decisions,
     socket_path,
     transition_operator_alert,
@@ -157,6 +164,9 @@ def snapshot(
         "paused": paused,
         "main_sha": main_sha,
         "active_gate": active_gate,
+        "meta_active_gate": active_gate,
+        "main_active_gate": active_gate,
+        "governance_consistent": True,
         "gate_exit": gate_exit,
         "gate_audit": gate_audit,
         "meta_comments_truncated": False,
@@ -197,6 +207,178 @@ def graphql_payload(
             },
         }
     }
+
+
+class IterationCaptureTests(unittest.TestCase):
+    def test_valid_outcome_and_usage_are_captured(self) -> None:
+        capture = IterationCapture()
+        capture.observe(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "text": (
+                        "summary\n"
+                        'LOOP_OUTCOME {"role":"dispatcher",'
+                        '"outcome":"terminal-noop",'
+                        '"result":"nothing-to-dispatch","mutations":[]}'
+                    ),
+                },
+            }
+        )
+        capture.observe(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 123,
+                    "cached_input_tokens": 100,
+                    "output_tokens": 45,
+                },
+            }
+        )
+
+        completion = capture.completion("dispatcher", 0)
+
+        self.assertEqual("terminal-noop", completion["outcome"])
+        self.assertEqual("nothing-to-dispatch", completion["result"])
+        self.assertEqual(123, completion["usage"]["input_tokens"])
+
+    def test_missing_or_wrong_role_outcome_is_invalid(self) -> None:
+        capture = IterationCapture()
+        capture.observe(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "text": (
+                        'LOOP_OUTCOME {"role":"coder",'
+                        '"outcome":"terminal-noop","result":"done",'
+                        '"mutations":[]}'
+                    ),
+                },
+            }
+        )
+
+        completion = capture.completion("dispatcher", 0)
+
+        self.assertEqual("invalid", completion["outcome"])
+        self.assertEqual("invalid-outcome-role", completion["result"])
+
+
+class TrustedGateAndBudgetTests(unittest.TestCase):
+    def test_inspect_event_returns_only_bounded_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_dir = Path(temporary)
+            (runtime_dir / "dispatcher.lock").write_text(
+                json.dumps(
+                    {
+                        "raw_log": "/private/huge.jsonl",
+                        "completed_events": [
+                            {
+                                "event_id": "event-1",
+                                "reason": "reconcile-or-dispatch",
+                                "exit_code": 0,
+                                "outcome": "terminal-noop",
+                                "result": "nothing-to-dispatch",
+                                "mutations": [],
+                                "usage": {
+                                    "input_tokens": 100,
+                                    "output_tokens": 10,
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            options = runtime_parser().parse_args(
+                [
+                    "inspect-event",
+                    "--runtime-dir",
+                    str(runtime_dir),
+                    "--event-id",
+                    "event-1",
+                ]
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                result = run_inspect_event(options)
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(0, result)
+        self.assertTrue(payload["found"])
+        self.assertEqual("nothing-to-dispatch", payload["completion"]["result"])
+        self.assertNotIn("raw_log", stdout.getvalue())
+
+    def test_trusted_gate_mismatch_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "AGENTS.md").write_text(
+                "> Active gate：`W1-final`\n", encoding="utf-8"
+            )
+            (root / "docs").mkdir()
+            (root / "docs/curriculum.md").write_text(
+                "> 目前 active gate：`W1-final`\n", encoding="utf-8"
+            )
+
+            state = apply_trusted_gate(snapshot(active_gate="W1-G4"), root)
+
+        self.assertFalse(state["governance_consistent"])
+        self.assertEqual("W1-final", state["main_active_gate"])
+        self.assertEqual("W1-G4", state["meta_active_gate"])
+        self.assertEqual([], classify_snapshot(state))
+        status = describe_operator_status(state, decisions=[], busy=[])
+        self.assertEqual("governance-inconsistent", status["reason"])
+        self.assertEqual("user", status["owner"])
+
+    def test_daily_budget_sums_usage_and_stops_routing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_dir = Path(temporary)
+            (runtime_dir / "usage.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "recorded_at": "2026-07-18T00:00:00Z",
+                                "usage": {
+                                    "input_tokens": 700,
+                                    "output_tokens": 100,
+                                },
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "recorded_at": "2026-07-17T23:59:59Z",
+                                "usage": {
+                                    "input_tokens": 9999,
+                                    "output_tokens": 9999,
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                800,
+                daily_token_usage(runtime_dir, utc_date="2026-07-18"),
+            )
+            with patch(
+                "scripts.codex_loop_runtime.time.strftime",
+                return_value="2026-07-18",
+            ):
+                state = apply_usage_budget(
+                    snapshot(),
+                    runtime_dir=runtime_dir,
+                    daily_token_budget=800,
+                )
+
+        self.assertTrue(state["usage_budget_exhausted"])
+        self.assertEqual([], classify_snapshot(state))
+        status = describe_operator_status(state, decisions=[], busy=[])
+        self.assertEqual("usage-budget-exhausted", status["reason"])
+        self.assertEqual("user", status["owner"])
 
 
 class PaneTitleTests(unittest.TestCase):
@@ -1466,7 +1648,7 @@ class EventRoutingTests(unittest.TestCase):
             "scripts.codex_loop_runtime.subprocess.run",
             return_value=completed,
         ) as run:
-            poll_github("gh", Path("/tmp"), "test/repo")
+            poll_github("gh", ROOT, "test/repo")
 
         command = run.call_args.args[0]
         search_argument = next(
@@ -1780,6 +1962,14 @@ class OperatorStatusTests(unittest.TestCase):
                 "last_event_id": "event-1",
                 "last_exit_code": 0,
                 "last_finished_at": "2026-07-15T05:05:02Z",
+                "completed_events": [
+                    {
+                        "event_id": "event-1",
+                        "exit_code": 0,
+                        "outcome": "mutated",
+                        "result": "claimed-work",
+                    }
+                ],
             }
         }
 
@@ -1828,6 +2018,14 @@ class OperatorStatusTests(unittest.TestCase):
                     "state": "waiting",
                     "last_event_id": "event-1",
                     "last_exit_code": 0,
+                    "completed_events": [
+                        {
+                            "event_id": "event-1",
+                            "exit_code": 0,
+                            "outcome": "mutated",
+                            "result": "claimed-work",
+                        }
+                    ],
                 }
             },
         )
@@ -1863,7 +2061,7 @@ class OperatorStatusTests(unittest.TestCase):
 
         self.assertIsNone(stalled)
 
-    def test_empty_dispatcher_no_op_without_checkpoint_is_stalled(self) -> None:
+    def test_empty_dispatcher_terminal_no_op_is_not_stalled(self) -> None:
         state = snapshot()
         decision = classify_snapshot(state)[0]
 
@@ -1881,11 +2079,19 @@ class OperatorStatusTests(unittest.TestCase):
                     "state": "waiting",
                     "last_event_id": "event-1",
                     "last_exit_code": 0,
+                    "completed_events": [
+                        {
+                            "event_id": "event-1",
+                            "exit_code": 0,
+                            "outcome": "terminal-noop",
+                            "result": "nothing-to-dispatch",
+                        }
+                    ],
                 }
             },
         )
 
-        self.assertIsNotNone(stalled)
+        self.assertIsNone(stalled)
 
     def test_gate_exit_checkpoint_changes_workflow_fingerprint(self) -> None:
         main_sha = "a" * 40
@@ -1938,12 +2144,28 @@ class OperatorStatusTests(unittest.TestCase):
                     "state": "waiting",
                     "last_event_id": "audit-event",
                     "last_exit_code": 0,
+                    "completed_events": [
+                        {
+                            "event_id": "audit-event",
+                            "exit_code": 0,
+                            "outcome": "blocked",
+                            "result": "publication-failed-no-publish",
+                        }
+                    ],
                 }
             },
         )
 
         self.assertIsNotNone(stalled)
         self.assertEqual("gate-auditor", stalled["role"])
+        status = describe_operator_status(
+            state,
+            decisions=[decision],
+            busy=[],
+            stalled=stalled,
+        )
+        self.assertEqual("iteration-blocked", status["reason"])
+        self.assertEqual("operator", status["owner"])
 
     def test_matching_gate_audit_clears_gate_auditor_stall(self) -> None:
         main_sha = "a" * 40
@@ -2038,6 +2260,8 @@ class OperatorStatusTests(unittest.TestCase):
                             "reason": decision["reason"],
                             "exit_code": 0,
                             "finished_at": "2026-07-15T05:05:02Z",
+                            "outcome": "mutated",
+                            "result": "claimed-work",
                         },
                         {
                             "event_id": "alert-event",
@@ -2067,6 +2291,8 @@ class OperatorAlertTests(unittest.TestCase):
                 "role": "coder",
                 "event_id": "event-1",
                 "exit_code": 0,
+                "outcome": "mutated",
+                "iteration_result": "claimed-work",
             },
         )
         return state, status
@@ -2340,6 +2566,14 @@ class AgentRuntimeTests(unittest.TestCase):
         skill.write_text(
             "---\nname: emmet-loop-dispatcher\n---\n", encoding="utf-8"
         )
+        (self.worktree / "AGENTS.md").write_text(
+            "> Active gate：`W1-G2`\n", encoding="utf-8"
+        )
+        docs = self.worktree / "docs"
+        docs.mkdir()
+        (docs / "curriculum.md").write_text(
+            "> 目前 active gate：`W1-G2`\n", encoding="utf-8"
+        )
         scripts = self.worktree / "scripts"
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts" / "codex_loop.py", scripts)
@@ -2415,7 +2649,20 @@ class AgentRuntimeTests(unittest.TestCase):
                     "type": "item.completed",
                     "item": {
                         "type": "agent_message",
-                        "text": "fake-visible-event",
+                        "text": (
+                            "fake-visible-event\\n"
+                            'LOOP_OUTCOME {"role":"dispatcher",'
+                            '"outcome":"terminal-noop",'
+                            '"result":"fixture-no-op","mutations":[]}'
+                        ),
+                    },
+                }), flush=True)
+                print(json.dumps({
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 50,
+                        "output_tokens": 20,
                     },
                 }), flush=True)
                 time.sleep(float(os.environ.get("FAKE_CODEX_SLEEP", "0")))
@@ -2705,8 +2952,8 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn("fake-visible-event", agent_stdout)
         arguments = json.loads(self.capture.read_text(encoding="utf-8"))
         self.assertIn("--model", arguments)
-        self.assertIn("gpt-5.6-sol", arguments)
-        self.assertIn('model_reasoning_effort="high"', arguments)
+        self.assertIn("gpt-5.6-luna", arguments)
+        self.assertIn('model_reasoning_effort="medium"', arguments)
         self.assertIn('"preflight":', arguments[-1])
 
     def test_event_manager_waits_for_user_after_exit_ready_gate_audit(self) -> None:

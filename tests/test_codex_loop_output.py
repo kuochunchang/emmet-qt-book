@@ -92,6 +92,28 @@ class OutputFormatTests(unittest.TestCase):
 
 
 class JsonlOutputTests(unittest.TestCase):
+    def test_jsonl_observer_receives_split_child_events(self) -> None:
+        observed: list[dict[str, object]] = []
+        renderer = output.LoopOutput(
+            "jsonl",
+            "dispatcher",
+            stdout=io.BytesIO(),
+            stderr=io.BytesIO(),
+            event_observer=observed.append,
+        )
+        event = {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        }
+        payload = (json.dumps(event) + "\n").encode("utf-8")
+
+        renderer.feed_stdout(payload[:7])
+        renderer.feed_stdout(payload[7:])
+        renderer.close()
+
+        self.assertEqual([event], observed)
+        self.assertEqual((), renderer.observer_errors)
+
     def test_jsonl_preserves_component_and_child_streams_without_raw_files(
         self,
     ) -> None:
