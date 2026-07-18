@@ -20,7 +20,7 @@ import subprocess
 import sys
 import threading
 import tomllib
-from typing import Callable, Iterator, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 try:
     from .codex_loop_output import LoopOutput, resolve_output_format
@@ -32,8 +32,8 @@ ROLES = ("dispatcher", "coder", "reviewer", "gate-auditor")
 PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 ROLE_CODEX_DEFAULTS: dict[str, dict[str, str]] = {
     "dispatcher": {
-        "model": "gpt-5.6-sol",
-        "model_reasoning_effort": "high",
+        "model": "gpt-5.6-luna",
+        "model_reasoning_effort": "medium",
         "model_verbosity": "low",
     },
     "coder": {
@@ -47,8 +47,8 @@ ROLE_CODEX_DEFAULTS: dict[str, dict[str, str]] = {
         "model_verbosity": "low",
     },
     "gate-auditor": {
-        "model": "gpt-5.6-sol",
-        "model_reasoning_effort": "xhigh",
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "high",
         "model_verbosity": "low",
     },
 }
@@ -255,14 +255,17 @@ def build_command(
         f"Use $emmet-loop-{role} to execute exactly one idempotent {role} "
         "iteration for this repository, then stop. This wake came from the loop "
         "event manager. Do not sleep, poll, schedule another run, or start a second "
-        "iteration. If no safe action is available, report no-op and exit."
+        "iteration. If no safe action is available, report no-op and exit. End the "
+        "final response with exactly one line beginning LOOP_OUTCOME followed by a "
+        "compact JSON object with role, outcome (mutated, terminal-noop, blocked, or "
+        "failed), stable result, and a mutations array. This local envelope is "
+        "telemetry only and never authorizes a mutation."
     )
     if role == "gate-auditor":
         prompt += (
-            " If publication is authorized, do not launch a bare --body-file - "
-            "command with closed stdin. Open a live PTY session with echo disabled, "
-            "send the complete report through follow-up stdin, terminate it with "
-            "EOF, and wait for the publication command to exit."
+            " If publication is authorized, create a mode-0600 report file under "
+            "/tmp, pass that path to gh issue comment --body-file, then delete the "
+            "temporary file. Never use --body-file - or inline the report body."
         )
     command = [
         codex_bin,
@@ -326,18 +329,22 @@ def create_loop_output(
     raw_log_dir: Path,
     workdir: Path,
     common_dir: Path,
+    event_observer: Callable[[Mapping[str, object]], None] | None = None,
 ) -> LoopOutput:
     """Create the optional display layer, falling back to JSONL on failure."""
 
     resolved_format = resolve_output_format(output_format, sys.stdout)
     if resolved_format == "jsonl":
-        return LoopOutput("jsonl", component=component)
+        return LoopOutput(
+            "jsonl", component=component, event_observer=event_observer
+        )
     try:
         return LoopOutput(
             resolved_format,
             component=component,
             raw_log_dir=raw_log_dir,
             forbidden_roots=repository_private_roots(workdir, common_dir),
+            event_observer=event_observer,
         )
     except (OSError, RuntimeError, ValueError) as error:
         try:
@@ -349,7 +356,9 @@ def create_loop_output(
             )
         except (OSError, ValueError):
             pass
-        return LoopOutput("jsonl", component=component)
+        return LoopOutput(
+            "jsonl", component=component, event_observer=event_observer
+        )
 
 
 @contextmanager
@@ -392,7 +401,7 @@ def run_child(
 ) -> int:
     """Run Codex in its own process group while the child also holds the lock."""
 
-    capture = output is not None and output.pretty
+    capture = output is not None
     child = subprocess.Popen(
         command,
         cwd=workdir,

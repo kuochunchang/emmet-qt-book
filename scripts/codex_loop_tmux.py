@@ -59,6 +59,16 @@ def positive_number(value: str) -> float:
     return number
 
 
+def nonnegative_integer(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("數值必須是整數") from error
+    if number < 0:
+        raise argparse.ArgumentTypeError("數值必須大於或等於 0")
+    return number
+
+
 def validate_session_name(value: str) -> str:
     if not SESSION_PATTERN.fullmatch(value):
         raise argparse.ArgumentTypeError(
@@ -118,7 +128,7 @@ def discover_automatic_profile(role: str) -> str | None:
 def apply_automatic_role_profiles(options: argparse.Namespace) -> None:
     """Fill only profile slots that were not selected explicitly."""
 
-    if options.profile is not None:
+    if not getattr(options, "auto_profiles", False) or options.profile is not None:
         return
     for role in adapter.ROLES:
         attribute = role_profile_attribute(role)
@@ -381,6 +391,7 @@ def build_component_commands(
     interval_seconds: float,
     retry_seconds: float,
     dispatcher_heartbeat_seconds: float,
+    daily_token_budget: int = 1_000_000,
     profile: str | None = None,
     role_profiles: Mapping[str, str | None] | None = None,
     tmux_bin: str = "tmux",
@@ -425,6 +436,8 @@ def build_component_commands(
         str(retry_seconds),
         "--dispatcher-heartbeat-seconds",
         str(dispatcher_heartbeat_seconds),
+        "--daily-token-budget",
+        str(daily_token_budget),
     ]
     resolved_profiles = resolve_role_profiles(profile, role_profiles)
     for role, selected_profile in resolved_profiles.items():
@@ -1393,6 +1406,8 @@ def build_rotated_start_command(
         str(options.retry_seconds),
         "--dispatcher-heartbeat-seconds",
         str(options.dispatcher_heartbeat_seconds),
+        "--daily-token-budget",
+        str(options.daily_token_budget),
     ]
     if options.profile:
         command.extend(["--profile", options.profile])
@@ -1521,6 +1536,7 @@ def launch(options: argparse.Namespace) -> int:
         interval_seconds=options.interval_seconds,
         retry_seconds=options.retry_seconds,
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
+        daily_token_budget=options.daily_token_budget,
         role_profiles=profiles,
         tmux_bin=tmux_bin,
         session=options.session,
@@ -1608,6 +1624,7 @@ def launch(options: argparse.Namespace) -> int:
         interval_seconds=options.interval_seconds,
         retry_seconds=options.retry_seconds,
         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
+        daily_token_budget=options.daily_token_budget,
         role_profiles=profiles,
         tmux_bin=tmux_bin,
         session=options.session,
@@ -1735,6 +1752,14 @@ def parser() -> argparse.ArgumentParser:
             "role-specific profile 可覆寫，未指定則使用 repo 角色預設。"
         ),
     )
+    result.add_argument(
+        "--auto-profiles",
+        action="store_true",
+        help=(
+            "明確啟用 $CODEX_HOME/loop-<role>.config.toml 與 loop.config.toml "
+            "自動偵測；預設使用 repo 角色設定。"
+        ),
+    )
     for role in adapter.ROLES:
         result.add_argument(
             f"--{role}-profile",
@@ -1794,6 +1819,12 @@ def parser() -> argparse.ArgumentParser:
         "--dispatcher-heartbeat-seconds",
         type=positive_number,
         default=1800.0,
+    )
+    result.add_argument(
+        "--daily-token-budget",
+        type=nonnegative_integer,
+        default=1_000_000,
+        help="events component 的每 UTC 日 token 上限；0 關閉。",
     )
     return result
 

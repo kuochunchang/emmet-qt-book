@@ -23,7 +23,14 @@ description: agent 閉環的 one-shot 調度角色——恢復 GitHub durable st
    head／base／draft／mergeability。只對缺口分頁；預設禁止完整 comments/history 與
    all-issues 查詢。
 5. Mutation 結果不明才重查。成功只留 exit／test count／必要 hash 的 compact summary；
-   失敗才輸出 bounded diagnostics；結尾只輸出一個 compact summary。
+   失敗才輸出 bounded diagnostics；單一成功 command 最多回送 8 KiB，失敗 diagnostics
+   最多 32 KiB。禁止直接掃描 runtime raw JSONL／stderr logs；診斷既有 iteration 只用
+   `scripts/codex-loop inspect-event --runtime-dir <DIR> --event-id <ID>`。
+6. 結尾可先輸出 compact 人類摘要，但最後一行必須是可機械解析且單行的
+   `LOOP_OUTCOME {"role":"<role>","outcome":"<mutated|terminal-noop|blocked|failed>","result":"<stable-kebab-case>","mutations":[]}`。
+   有已確認 workflow mutation 才用 `mutated`；成功且無 mutation 用 `terminal-noop`；
+   需人類／外部狀態解除才用 `blocked`；執行或 transport 失敗用 `failed`。不得在
+   marker 後再輸出文字。
 <!-- loop-common-contract:end -->
 
 ## 每輪程序

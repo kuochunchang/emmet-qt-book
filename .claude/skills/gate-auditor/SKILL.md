@@ -23,7 +23,14 @@ description: Gate-exit checkpoint 的 one-shot 獨立稽核角色。只在 event
    head／base／draft／mergeability。只對缺口分頁；預設禁止完整 comments/history 與
    all-issues 查詢。
 5. Mutation 結果不明才重查。成功只留 exit／test count／必要 hash 的 compact summary；
-   失敗才輸出 bounded diagnostics；結尾只輸出一個 compact summary。
+   失敗才輸出 bounded diagnostics；單一成功 command 最多回送 8 KiB，失敗 diagnostics
+   最多 32 KiB。禁止直接掃描 runtime raw JSONL／stderr logs；診斷既有 iteration 只用
+   `scripts/codex-loop inspect-event --runtime-dir <DIR> --event-id <ID>`。
+6. 結尾可先輸出 compact 人類摘要，但最後一行必須是可機械解析且單行的
+   `LOOP_OUTCOME {"role":"<role>","outcome":"<mutated|terminal-noop|blocked|failed>","result":"<stable-kebab-case>","mutations":[]}`。
+   有已確認 workflow mutation 才用 `mutated`；成功且無 mutation 用 `terminal-noop`；
+   需人類／外部狀態解除才用 `blocked`；執行或 transport 失敗用 `failed`。不得在
+   marker 後再輸出文字。
 <!-- loop-common-contract:end -->
 
 ## 唯一證據演算法
@@ -147,19 +154,17 @@ file、branch/worktree、scheduler 與 gate declaration。
 
 ## 結尾的操作者交接
 
-成功發佈時，以 `gh issue comment ... --body-file -` 或等價的 stdin 路徑傳入完整 report。
-Codex 的一般 command execution 沒有可用 stdin；不得直接啟動 bare `--body-file -` 命令，
-否則 `gh` 只會讀到 EOF 並送出空白 body。固定 transport 是：以 interactive PTY／session
-啟動 `stty -echo && gh issue comment ... --body-file -`，確認 command 仍在執行，再以
-follow-up `write_stdin` 傳入完整 report、送出 EOF，最後等待 command exit。其他 client
-必須使用等價的 live stdin channel；無法建立 live session 就不得嘗試發佈。若 command
-在 stdin write 前已退出，視為 publication failure，依 exact-marker 重查規則收斂，不得
-用第二種 transport 盲目重貼。
+成功發佈時，先用 `apply_patch` 在 `/tmp` 建立本輪唯一、不可預測檔名的 report，
+執行 `chmod 600`，再以 `gh issue comment 1 --body-file <REPORT_PATH>` 傳入完整內容。
+命令完成後用 `apply_patch` 刪除該暫存檔。這個 file-backed transport 不依賴 command
+stdin，可避免 bare `--body-file -` 在無 stdin 時發出空白留言。不得重用舊 report 檔；
+建立、chmod 或刪除失敗都 fail closed。
 
-不得使用 inline `--body`、heredoc、pipe、shell substitution 或暫存檔繞過這個 transport，
-也不要把 report body 放進會被 pretty renderer 顯示的 command argument，或在成功
-command output／agent message 回顯整份 report。PTY 必須先關閉 echo，完整 report 只留在
-Meta #1；pretty 仍照常無損保留 client 實際產生的底層事件。Terminal 最後一則 agent
+不得使用 inline `--body`、stdin、heredoc、pipe 或 shell substitution，也不要把 report
+body 放進會被 pretty renderer 顯示的 command argument，或在成功 command output／agent
+message 回顯整份 report。完整 report 只留在 Meta #1；pretty 仍照常無損保留 client
+實際產生的底層事件。發佈命令失敗時先依 exact-marker 重查規則收斂，不得更換 transport
+盲目重貼。Terminal 最後一則 agent
 message 使用下列至多九個 logical lines：
 
 ```text

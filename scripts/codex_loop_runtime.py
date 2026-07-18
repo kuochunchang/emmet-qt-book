@@ -38,6 +38,16 @@ MAX_EVENT_BYTES = 64 * 1024
 MAX_COMPLETED_EVENTS = 4
 MAX_PREFLIGHT_OBJECTS = 8
 MAX_PANE_STATUS_CHARS = 48
+USAGE_LOG_FILENAME = "usage.jsonl"
+DEFAULT_DAILY_TOKEN_BUDGET = 1_000_000
+ITERATION_OUTCOMES = frozenset(
+    {"mutated", "terminal-noop", "blocked", "failed"}
+)
+SAFE_TERMINAL_NOOP_REASONS = frozenset(
+    {"reconcile-or-dispatch", "pull-request-disappeared", "oversight-heartbeat"}
+)
+OUTCOME_PREFIX = "LOOP_OUTCOME "
+OUTCOME_RESULT_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){0,15}$")
 PANE_ID_PATTERN = re.compile(r"^%[0-9]+$")
 GATE_EXIT_MARKER_PATTERN = re.compile(
     r"<!--\s*emmet-loop:dispatcher:gate-exit:"
@@ -55,6 +65,14 @@ META_ACTIVE_GATE_PATTERN = re.compile(
     r"(?m)^- Active gate：`"
     r"(?P<gate>[A-Za-z0-9][A-Za-z0-9._-]{0,63})`"
     r"（已生效）\s*$"
+)
+AGENTS_ACTIVE_GATE_PATTERN = re.compile(
+    r"(?m)^> Active gate：`"
+    r"(?P<gate>[A-Za-z0-9][A-Za-z0-9._-]{0,63})`\s*$"
+)
+CURRICULUM_ACTIVE_GATE_PATTERN = re.compile(
+    r"(?m)^> 目前 active gate：`"
+    r"(?P<gate>[A-Za-z0-9][A-Za-z0-9._-]{0,63})`\s*$"
 )
 DISPATCHER_SIGNATURE = "— Dispatcher"
 GATE_AUDITOR_SIGNATURE = "— Gate Auditor"
@@ -177,6 +195,189 @@ def emit(**fields: object) -> None:
                     pass
             return
     print(json.dumps(fields, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+class IterationCapture:
+    """Collect the final role envelope and token usage from one Codex JSONL turn."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.final_message: str | None = None
+        self.usage: dict[str, int] = {}
+        self.turn_completed = False
+        self.turn_failed = False
+
+    def observe(self, event: Mapping[str, object]) -> None:
+        event_type = event.get("type")
+        if event_type == "item.completed":
+            item = event.get("item")
+            if isinstance(item, Mapping) and item.get("type") == "agent_message":
+                text = item.get("text")
+                if isinstance(text, str):
+                    self.final_message = text
+        elif event_type == "turn.completed":
+            self.turn_completed = True
+            raw_usage = event.get("usage")
+            if isinstance(raw_usage, Mapping):
+                for key in (
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                ):
+                    value = raw_usage.get(key)
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        self.usage[key] = max(0, value)
+        elif event_type == "turn.failed":
+            self.turn_failed = True
+
+    def completion(self, role: str, exit_code: int) -> dict[str, object]:
+        result: dict[str, object] = {
+            "outcome": "failed" if exit_code != 0 or self.turn_failed else "invalid",
+            "result": "child-exit" if exit_code != 0 else "missing-outcome",
+            "mutations": [],
+            "usage": dict(self.usage),
+        }
+        message = self.final_message
+        if not isinstance(message, str):
+            return result
+        marker = next(
+            (
+                line.removeprefix(OUTCOME_PREFIX)
+                for line in reversed(message.splitlines())
+                if line.startswith(OUTCOME_PREFIX)
+            ),
+            None,
+        )
+        if marker is None:
+            return result
+        try:
+            value = json.loads(marker)
+        except json.JSONDecodeError:
+            result["result"] = "invalid-outcome-json"
+            return result
+        if not isinstance(value, Mapping) or value.get("role") != role:
+            result["result"] = "invalid-outcome-role"
+            return result
+        outcome = value.get("outcome")
+        stable_result = value.get("result")
+        mutations = value.get("mutations")
+        if (
+            outcome not in ITERATION_OUTCOMES
+            or not isinstance(stable_result, str)
+            or OUTCOME_RESULT_PATTERN.fullmatch(stable_result) is None
+            or not isinstance(mutations, list)
+            or len(mutations) > 20
+            or any(
+                not isinstance(item, str)
+                or not item
+                or len(item) > 160
+                or any(ord(character) < 0x20 for character in item)
+                for item in mutations
+            )
+        ):
+            result["result"] = "invalid-outcome-schema"
+            return result
+        if exit_code != 0 or self.turn_failed:
+            outcome = "failed"
+        result.update(
+            {
+                "outcome": outcome,
+                "result": stable_result,
+                "mutations": mutations,
+            }
+        )
+        return result
+
+
+def _append_usage_record(
+    runtime_dir: Path, record: Mapping[str, object]
+) -> None:
+    """Append local-only usage telemetry without making it workflow state."""
+
+    usage = record.get("usage")
+    if not isinstance(usage, Mapping) or not usage:
+        return
+    runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(runtime_dir, 0o700)
+    path = runtime_dir / USAGE_LOG_FILENAME
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        payload = (
+            json.dumps(dict(record), ensure_ascii=False, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        os.write(descriptor, payload)
+    finally:
+        os.close(descriptor)
+
+
+def daily_token_usage(
+    runtime_dir: Path, *, utc_date: str | None = None
+) -> int:
+    """Sum raw input and output tokens recorded for one UTC day."""
+
+    target_date = utc_date or time.strftime("%Y-%m-%d", time.gmtime())
+    path = runtime_dir / USAGE_LOG_FILENAME
+    if not path.exists():
+        return 0
+    total = 0
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"usage ledger 第 {line_number} 行不是有效 JSON"
+                ) from error
+            if not isinstance(record, Mapping):
+                raise ValueError(
+                    f"usage ledger 第 {line_number} 行不是 object"
+                )
+            recorded_at = record.get("recorded_at")
+            if not isinstance(recorded_at, str) or not recorded_at.startswith(
+                target_date
+            ):
+                continue
+            usage = record.get("usage")
+            if not isinstance(usage, Mapping):
+                continue
+            for key in ("input_tokens", "output_tokens"):
+                value = usage.get(key, 0)
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise ValueError(
+                        f"usage ledger 第 {line_number} 行的 {key} 無效"
+                    )
+                total += value
+    return total
+
+
+def apply_usage_budget(
+    snapshot: Mapping[str, object],
+    *,
+    runtime_dir: Path,
+    daily_token_budget: int,
+) -> dict[str, object]:
+    """Attach a local circuit-breaker state without changing durable workflow."""
+
+    result = dict(snapshot)
+    used = daily_token_usage(runtime_dir)
+    result.update(
+        {
+            "daily_token_usage": used,
+            "daily_token_budget": daily_token_budget,
+            "usage_budget_exhausted": (
+                daily_token_budget > 0 and used >= daily_token_budget
+            ),
+        }
+    )
+    return result
 
 
 def _clean_pane_status(value: object) -> str:
@@ -315,6 +516,11 @@ def operator_pane_status(
             "invalid-issue-state": "阻斷：Issue 狀態無效",
             "snapshot-incomplete": "阻斷：GitHub 狀態快照不完整",
             "gate-audit-unknown": "阻斷：Gate 稽核證據不確定",
+            "governance-inconsistent": "阻斷：active gate 正本不一致",
+            "usage-budget-exhausted": "阻斷：今日 token 預算已用完",
+            "iteration-blocked": "阻斷：iteration 需操作者介入",
+            "iteration-failed": "阻斷：iteration 執行失敗",
+            "iteration-invalid": "阻斷：iteration outcome 無效",
         }
         if reason in messages:
             return messages[reason]
@@ -337,6 +543,16 @@ def positive_number(value: str) -> float:
     number = float(value)
     if not math.isfinite(number) or number <= 0:
         raise argparse.ArgumentTypeError("數值必須是大於 0 的有限值")
+    return number
+
+
+def nonnegative_integer(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("數值必須是整數") from error
+    if number < 0:
+        raise argparse.ArgumentTypeError("數值必須大於或等於 0")
     return number
 
 
@@ -494,12 +710,14 @@ def run_agent(options: argparse.Namespace) -> int:
     if options.dry_run:
         return 0
 
+    iteration_capture = IterationCapture()
     output = adapter.create_loop_output(
         options.output_format,
         component=options.role,
         raw_log_dir=runtime_dir / "logs",
         workdir=workdir,
         common_dir=common_dir,
+        event_observer=iteration_capture.observe,
     )
     previous_output = _activate_operator_output(output)
     if output.pretty:
@@ -599,6 +817,7 @@ def run_agent(options: argparse.Namespace) -> int:
                         set_title("等待事件")
                     else:
                         set_title(agent_event_pane_status(event))
+                        iteration_capture.reset()
                         try:
                             workdir, _, command = _prepare_role(
                                 options.role,
@@ -625,20 +844,31 @@ def run_agent(options: argparse.Namespace) -> int:
                         finished_at = time.strftime(
                             "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
                         )
+                        completion = iteration_capture.completion(
+                            options.role, exit_code
+                        )
                         if isinstance(event_id, str):
-                            completed_events.append(
-                                {
-                                    "event_id": event_id,
-                                    "reason": str(
-                                        event.get("reason") or "unknown"
-                                    ),
-                                    "exit_code": exit_code,
-                                    "finished_at": finished_at,
-                                }
-                            )
+                            completed = {
+                                "event_id": event_id,
+                                "reason": str(
+                                    event.get("reason") or "unknown"
+                                ),
+                                "exit_code": exit_code,
+                                "finished_at": finished_at,
+                                **completion,
+                            }
+                            completed_events.append(completed)
                             completed_events[:] = completed_events[
                                 -MAX_COMPLETED_EVENTS:
                             ]
+                            _append_usage_record(
+                                runtime_dir,
+                                {
+                                    "recorded_at": finished_at,
+                                    "role": options.role,
+                                    **completed,
+                                },
+                            )
                         _write_agent_state(
                             lock_descriptor,
                             options.role,
@@ -651,6 +881,9 @@ def run_agent(options: argparse.Namespace) -> int:
                             result="iteration-finished",
                             event_id=event.get("event_id"),
                             exit_code=exit_code,
+                            outcome=completion.get("outcome"),
+                            iteration_result=completion.get("result"),
+                            usage=completion.get("usage"),
                         )
                         if exit_code == 0:
                             set_title("等待事件")
@@ -1082,6 +1315,63 @@ def normalize_snapshot(payload: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def apply_trusted_gate(
+    snapshot: Mapping[str, object], workdir: Path
+) -> dict[str, object]:
+    """Bind routing to the gate declared by both trusted main documents."""
+
+    result = dict(snapshot)
+    meta_gate = snapshot.get("active_gate")
+    incomplete = {
+        str(reason) for reason in snapshot.get("snapshot_incomplete", [])
+    }
+    declared: dict[str, str | None] = {}
+    for name, relative, pattern in (
+        ("agents", Path("AGENTS.md"), AGENTS_ACTIVE_GATE_PATTERN),
+        (
+            "curriculum",
+            Path("docs/curriculum.md"),
+            CURRICULUM_ACTIVE_GATE_PATTERN,
+        ),
+    ):
+        try:
+            text = (workdir / relative).read_text(encoding="utf-8")
+        except OSError:
+            declared[name] = None
+            incomplete.add(f"trusted-{name}-active-gate")
+            continue
+        matches = [match.group("gate") for match in pattern.finditer(text)]
+        if len(matches) != 1:
+            declared[name] = None
+            incomplete.add(f"trusted-{name}-active-gate")
+        else:
+            declared[name] = matches[0]
+
+    agents_gate = declared.get("agents")
+    curriculum_gate = declared.get("curriculum")
+    main_gate = (
+        agents_gate
+        if agents_gate is not None and agents_gate == curriculum_gate
+        else None
+    )
+    if agents_gate != curriculum_gate:
+        incomplete.add("trusted-active-gate-mismatch")
+    consistent = main_gate is not None and meta_gate == main_gate
+    if not consistent:
+        incomplete.add("gate-governance-mismatch")
+
+    result.update(
+        {
+            "meta_active_gate": meta_gate,
+            "main_active_gate": main_gate,
+            "active_gate": main_gate,
+            "governance_consistent": consistent,
+            "snapshot_incomplete": sorted(incomplete),
+        }
+    )
+    return result
+
+
 def _current_gate_checkpoint(
     snapshot: Mapping[str, object],
 ) -> Mapping[str, object] | None:
@@ -1127,6 +1417,12 @@ def classify_snapshot(snapshot: Mapping[str, object]) -> list[dict[str, object]]
             {"role": role, "action": "paused", "reason": "global-pause"}
             for role in adapter.ROLES
         ]
+
+    if snapshot.get("governance_consistent") is False:
+        return []
+
+    if snapshot.get("usage_budget_exhausted") is True:
+        return []
 
     if snapshot.get("snapshot_incomplete"):
         return [
@@ -1305,6 +1601,9 @@ def workflow_state_fingerprint(snapshot: Mapping[str, object]) -> str:
         "paused": snapshot.get("paused") is True,
         "main_sha": snapshot.get("main_sha"),
         "active_gate": snapshot.get("active_gate"),
+        "meta_active_gate": snapshot.get("meta_active_gate"),
+        "main_active_gate": snapshot.get("main_active_gate"),
+        "governance_consistent": snapshot.get("governance_consistent"),
         "gate_exit": (
             {
                 "gate": snapshot["gate_exit"].get("gate"),
@@ -1347,6 +1646,9 @@ def operator_state_fingerprint(snapshot: Mapping[str, object]) -> str:
         ),
         "meta_comments_truncated": snapshot.get("meta_comments_truncated")
         is True,
+        "governance_consistent": snapshot.get("governance_consistent"),
+        "usage_budget_exhausted": snapshot.get("usage_budget_exhausted") is True,
+        "daily_token_budget": snapshot.get("daily_token_budget"),
     }
     payload = json.dumps(
         canonical,
@@ -1458,11 +1760,19 @@ def detect_stalled_iteration(
     exit_code = completion.get("exit_code")
     if not isinstance(exit_code, int) or isinstance(exit_code, bool):
         return None
+    outcome = completion.get("outcome")
+    if (
+        outcome == "terminal-noop"
+        and decision.get("reason") in SAFE_TERMINAL_NOOP_REASONS
+    ):
+        return None
     return {
         "role": role,
         "event_id": event_id,
         "exit_code": exit_code,
         "finished_at": completion.get("finished_at"),
+        "outcome": outcome,
+        "iteration_result": completion.get("result"),
     }
 
 
@@ -1522,6 +1832,46 @@ def describe_operator_status(
             attention="全域 pause 正在阻止 loop 推進。",
         )
 
+    if snapshot.get("governance_consistent") is False:
+        meta_gate = snapshot.get("meta_active_gate")
+        main_gate = snapshot.get("main_active_gate")
+        return status(
+            health="blocked",
+            blocking=True,
+            owner="user",
+            reason="governance-inconsistent",
+            current=(
+                "trusted main 與 Meta Issue #1 的 active gate 不一致；"
+                f"main={main_gate!s}，meta={meta_gate!s}。"
+            ),
+            next_step=(
+                "依 gate-transition 流程修復 AGENTS.md、curriculum 與 Meta "
+                "Issue #1 的正本一致性；修復前 event manager 不派送任何角色。"
+            ),
+            attention="active gate governance mismatch; fail closed",
+            affected_role="user",
+        )
+
+    if snapshot.get("usage_budget_exhausted") is True:
+        used = snapshot.get("daily_token_usage")
+        budget = snapshot.get("daily_token_budget")
+        return status(
+            health="blocked",
+            blocking=True,
+            owner="user",
+            reason="usage-budget-exhausted",
+            current=(
+                f"本 UTC 日 loop 已記錄 {used} tokens，達到預算 "
+                f"{budget}；event manager 已停止派送新 iteration。"
+            ),
+            next_step=(
+                "等待下一個 UTC 日自動重置，或由操作者明確調整 "
+                "--daily-token-budget 後重啟 events component。"
+            ),
+            attention="local daily token circuit breaker is open",
+            affected_role="user",
+        )
+
     if len(busy_roles) > 1:
         return status(
             health="blocked",
@@ -1557,6 +1907,31 @@ def describe_operator_status(
         role = str(stalled.get("role") or "unknown")
         event_id = stalled.get("event_id")
         exit_code = stalled.get("exit_code")
+        outcome = str(stalled.get("outcome") or "invalid")
+        iteration_result = str(
+            stalled.get("iteration_result") or "missing-outcome"
+        )
+        if outcome in {"blocked", "failed", "invalid"}:
+            return status(
+                health="blocked",
+                blocking=True,
+                owner="operator",
+                reason=f"iteration-{outcome}",
+                current=(
+                    f"{role} iteration 已結束，但回報 {outcome}；"
+                    f"result={iteration_result}。"
+                ),
+                next_step=(
+                    "檢查該 event 的 bounded completion 與 live durable state；"
+                    "狀態改變或操作者明確處理前不自動重送模型事件。"
+                ),
+                affected_role=role,
+                exit_code=exit_code if isinstance(exit_code, int) else None,
+                attention=(
+                    f"{role} event {event_id} outcome={outcome} "
+                    f"result={iteration_result}"
+                ),
+            )
         return status(
             health="stalled",
             blocking=True,
@@ -1817,6 +2192,11 @@ HOLD_ALERT_UNTIL_STATE_CHANGE = frozenset(
         "invalid-issue-state",
         "snapshot-incomplete",
         "gate-audit-unknown",
+        "governance-inconsistent",
+        "usage-budget-exhausted",
+        "iteration-blocked",
+        "iteration-failed",
+        "iteration-invalid",
     }
 )
 
@@ -1844,6 +2224,7 @@ def build_operator_alert(
     requires_user = (
         blocker == "global-pause"
         or blocker == "gate-audit-unknown"
+        or blocker.startswith("iteration-")
         or status.get("owner") == "user"
         or severity == "critical"
         or (
@@ -2075,7 +2456,7 @@ def poll_github(gh_bin: str, workdir: Path, repo: str) -> dict[str, object]:
         raise ValueError(f"GitHub polling 回傳無效 JSON：{error}") from error
     if not isinstance(payload, Mapping):
         raise ValueError("GitHub polling 回傳格式錯誤")
-    return normalize_snapshot(payload)
+    return apply_trusted_gate(normalize_snapshot(payload), workdir)
 
 
 def _preflight_object(item: Mapping[str, object]) -> dict[str, object]:
@@ -2127,6 +2508,12 @@ def build_preflight_packet(
         "paused": snapshot.get("paused") is True,
         "main_sha": snapshot.get("main_sha"),
         "active_gate": snapshot.get("active_gate"),
+        "meta_active_gate": snapshot.get("meta_active_gate"),
+        "main_active_gate": snapshot.get("main_active_gate"),
+        "governance_consistent": snapshot.get("governance_consistent"),
+        "usage_budget_exhausted": snapshot.get("usage_budget_exhausted") is True,
+        "daily_token_usage": snapshot.get("daily_token_usage"),
+        "daily_token_budget": snapshot.get("daily_token_budget"),
         "gate_exit": (
             {
                 "gate": gate_exit.get("gate"),
@@ -2263,6 +2650,21 @@ def duplicate_delivery_is_suppressed(
             and exit_code == 0
         ):
             return True
+    event_id = previous.get("event_id")
+    completion = (
+        _completed_event(agent_state, event_id)
+        if isinstance(agent_state, Mapping) and isinstance(event_id, str)
+        else None
+    )
+    if completion is not None:
+        outcome = completion.get("outcome")
+        if outcome in {"blocked", "failed", "invalid"}:
+            return True
+        if (
+            outcome == "terminal-noop"
+            and decision.get("reason") in SAFE_TERMINAL_NOOP_REASONS
+        ):
+            return True
     return now - delivered_at < retry_seconds
 
 
@@ -2329,6 +2731,50 @@ def read_agent_states(
         if isinstance(metadata, dict):
             result[role] = metadata
     return result
+
+
+def run_inspect_event(options: argparse.Namespace) -> int:
+    """Print one bounded completion record; never expose raw role logs."""
+
+    runtime_dir = options.runtime_dir.expanduser().resolve()
+    states = read_agent_states(runtime_dir)
+    roles = [options.role] if options.role else list(adapter.ROLES)
+    for role in roles:
+        state = states.get(role)
+        if not isinstance(state, Mapping):
+            continue
+        completion = _completed_event(state, options.event_id)
+        if completion is None:
+            continue
+        allowed = {
+            key: completion.get(key)
+            for key in (
+                "event_id",
+                "reason",
+                "exit_code",
+                "finished_at",
+                "outcome",
+                "result",
+                "mutations",
+                "usage",
+            )
+        }
+        print(
+            json.dumps(
+                {"found": True, "role": role, "completion": allowed},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
+    print(
+        json.dumps(
+            {"found": False, "event_id": options.event_id},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 1
 
 
 def busy_roles(runtime_dir: Path) -> list[str]:
@@ -2612,6 +3058,8 @@ def start_control_rotation(
         str(options.retry_seconds),
         "--dispatcher-heartbeat-seconds",
         str(options.dispatcher_heartbeat_seconds),
+        "--daily-token-budget",
+        str(options.daily_token_budget),
     ]
     if options.rotation_profile:
         command.extend(["--profile", options.rotation_profile])
@@ -2719,6 +3167,7 @@ def run_events(options: argparse.Namespace) -> int:
     delivered: dict[str, dict[str, object]] = {}
     active_alert: dict[str, object] | None = None
     escalated_alert_ids: set[str] = set()
+    emitted_alert_transitions: set[tuple[str, str]] = set()
     last_dispatcher_wake = time.monotonic()
     previous_snapshot: dict[str, object] | None = None
     dispatcher_cleanup_pending = False
@@ -2822,6 +3271,11 @@ def run_events(options: argparse.Namespace) -> int:
                     set_title("換代：handoff 完成")
                     handoff = True
                     break
+                snapshot = apply_usage_budget(
+                    snapshot,
+                    runtime_dir=runtime_dir,
+                    daily_token_budget=options.daily_token_budget,
+                )
                 stalled = detect_stalled_iteration(
                     snapshot,
                     deliveries=delivered,
@@ -2853,6 +3307,15 @@ def run_events(options: argparse.Namespace) -> int:
                         last_dispatcher_wake=last_dispatcher_wake,
                         dispatcher_heartbeat_seconds=options.dispatcher_heartbeat_seconds,
                     )
+                if (
+                    isinstance(active_alert, Mapping)
+                    and active_alert.get("blocker")
+                    == "no-durable-progress-after-iteration"
+                    and active_alert.get("workflow_fingerprint")
+                    == workflow_state_fingerprint(snapshot)
+                    and active_alert.get("alert_id") in escalated_alert_ids
+                ):
+                    decisions = []
                 preliminary_status = describe_operator_status(
                     snapshot,
                     decisions=decisions,
@@ -2989,8 +3452,18 @@ def run_events(options: argparse.Namespace) -> int:
                     active_alert,
                     operator_status,
                 )
+                deduplicated_transitions: list[dict[str, object]] = []
+                for transition in transitions:
+                    result = transition.get("result")
+                    alert_id = transition.get("alert_id")
+                    if isinstance(result, str) and isinstance(alert_id, str):
+                        key = (result, alert_id)
+                        if key in emitted_alert_transitions:
+                            continue
+                        emitted_alert_transitions.add(key)
+                    deduplicated_transitions.append(transition)
                 emit_operator_transitions(
-                    transitions,
+                    deduplicated_transitions,
                     repository=repo,
                     dry_run=options.dry_run,
                 )
@@ -3156,8 +3629,24 @@ def parser() -> argparse.ArgumentParser:
         default=1800.0,
         help="在途狀態持續時喚醒 dispatcher 做 oversight（預設 1800）。",
     )
+    events.add_argument(
+        "--daily-token-budget",
+        type=nonnegative_integer,
+        default=DEFAULT_DAILY_TOKEN_BUDGET,
+        help=(
+            "每個 UTC 日允許的 loop input+output token 上限；"
+            "0 關閉 circuit breaker（預設 1000000）。"
+        ),
+    )
     events.add_argument("--once", action="store_true")
     events.add_argument("--dry-run", action="store_true")
+    inspect_event = components.add_parser(
+        "inspect-event",
+        help="輸出單一 event 的 bounded completion，不讀取 raw logs。",
+    )
+    inspect_event.add_argument("--runtime-dir", type=Path, required=True)
+    inspect_event.add_argument("--event-id", required=True)
+    inspect_event.add_argument("--role", choices=adapter.ROLES)
     return result
 
 
@@ -3167,6 +3656,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if options.max_events < 0:
             parser().error("--max-events 不得小於 0")
         return run_agent(options)
+    if options.component == "inspect-event":
+        return run_inspect_event(options)
     return run_events(options)
 
 

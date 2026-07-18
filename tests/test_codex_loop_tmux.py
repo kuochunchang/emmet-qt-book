@@ -106,7 +106,12 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 )
 
                 options = launcher.parser().parse_args(
-                    ["restart", "--coder-profile", "explicit-coder"]
+                    [
+                        "restart",
+                        "--auto-profiles",
+                        "--coder-profile",
+                        "explicit-coder",
+                    ]
                 )
                 launcher.apply_automatic_role_profiles(options)
 
@@ -124,6 +129,22 @@ class CodexLoopTmuxTests(unittest.TestCase):
                 self.assertIsNone(
                     launcher.discover_automatic_profile("coder")
                 )
+
+    def test_repo_defaults_ignore_implicit_home_profiles(self) -> None:
+        options = launcher.parser().parse_args(["restart"])
+        with mock.patch.object(
+            launcher,
+            "discover_automatic_profile",
+            side_effect=AssertionError("automatic discovery is opt-in"),
+        ):
+            launcher.apply_automatic_role_profiles(options)
+
+        self.assertTrue(
+            all(
+                getattr(options, launcher.role_profile_attribute(role)) is None
+                for role in launcher.adapter.ROLES
+            )
+        )
 
     def test_explicit_shared_profile_disables_automatic_discovery(self) -> None:
         options = launcher.parser().parse_args(
@@ -1121,6 +1142,10 @@ class CodexLoopTmuxTests(unittest.TestCase):
         self.assertEqual("gpt-5.6-sol", defaults["coder"]["model"])
         self.assertEqual("high", defaults["coder"]["reasoning_effort"])
         self.assertEqual("xhigh", defaults["reviewer"]["reasoning_effort"])
+        self.assertEqual("gpt-5.6-luna", defaults["dispatcher"]["model"])
+        self.assertEqual("medium", defaults["dispatcher"]["reasoning_effort"])
+        self.assertEqual("gpt-5.6-terra", defaults["gate-auditor"]["model"])
+        self.assertEqual("high", defaults["gate-auditor"]["reasoning_effort"])
 
     def test_legacy_null_profile_session_is_not_misreported_as_defaults(
         self,

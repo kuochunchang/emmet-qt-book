@@ -23,7 +23,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import BinaryIO, Mapping, Sequence, TextIO
+from typing import BinaryIO, Callable, Mapping, Sequence, TextIO
 
 
 OUTPUT_FORMATS = ("auto", "pretty", "jsonl")
@@ -446,6 +446,7 @@ class LoopOutput:
         stdout: TextIO | BinaryIO | None = None,
         stderr: TextIO | BinaryIO | None = None,
         forbidden_roots: Sequence[Path | str] = (),
+        event_observer: Callable[[Mapping[str, object]], None] | None = None,
     ) -> None:
         self.stdout = stdout if stdout is not None else sys.stdout
         self.stderr = stderr if stderr is not None else sys.stderr
@@ -454,6 +455,10 @@ class LoopOutput:
         self._lock = threading.RLock()
         self._stdout_buffer = bytearray()
         self._stderr_buffer = bytearray()
+        self._observer_buffer = bytearray()
+        self._observer_overflow = 0
+        self._event_observer = event_observer
+        self._observer_errors: list[Exception] = []
         self._stdout_overflow = 0
         self._stderr_overflow = 0
         self._closed = False
@@ -542,6 +547,10 @@ class LoopOutput:
     @property
     def display_errors(self) -> tuple[Exception, ...]:
         return tuple(self._display_errors)
+
+    @property
+    def observer_errors(self) -> tuple[Exception, ...]:
+        return tuple(self._observer_errors)
 
     @property
     def display_dropped(self) -> int:
@@ -797,6 +806,7 @@ class LoopOutput:
             raise TypeError("stdout data must be bytes")
         if not value:
             return
+        self._observe_stdout(value)
         if not self.pretty:
             self._require_open()
             if self._degraded:
@@ -817,6 +827,47 @@ class LoopOutput:
                 return
         if degraded_while_waiting:
             self._write_degraded_bytes("stdout", value)
+
+    def _observe_stdout(self, value: bytes) -> None:
+        """Parse a bounded copy of child JSONL for local completion telemetry."""
+
+        if self._event_observer is None:
+            return
+        start = 0
+        while start < len(value):
+            end = value.find(b"\n", start)
+            fragment = value[start:] if end < 0 else value[start:end]
+            if self._observer_overflow:
+                self._observer_overflow += len(fragment)
+            elif len(self._observer_buffer) + len(fragment) <= MAX_LINE_BYTES:
+                self._observer_buffer.extend(fragment)
+            else:
+                available = max(0, MAX_LINE_BYTES - len(self._observer_buffer))
+                self._observer_buffer.extend(fragment[:available])
+                self._observer_overflow = (
+                    len(self._observer_buffer) + len(fragment) - available
+                )
+            if end < 0:
+                break
+            self._complete_observer_line()
+            start = end + 1
+
+    def _complete_observer_line(self) -> None:
+        data = bytes(self._observer_buffer)
+        overflow = self._observer_overflow
+        self._observer_buffer.clear()
+        self._observer_overflow = 0
+        if overflow or not data or self._event_observer is None:
+            return
+        try:
+            value = json.loads(data.removesuffix(b"\r").decode("utf-8"))
+            if isinstance(value, Mapping):
+                self._event_observer(value)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        except Exception as error:
+            if len(self._observer_errors) < 3:
+                self._observer_errors.append(error)
 
     def feed_stderr(self, value: bytes) -> None:
         """Consume Codex stderr bytes, preserving them separately in pretty mode."""
@@ -934,6 +985,8 @@ class LoopOutput:
         try:
             if self._closed:
                 return
+            if self._observer_buffer or self._observer_overflow:
+                self._complete_observer_line()
             if self.pretty:
                 if self._stdout_buffer or self._stdout_overflow:
                     self._complete_line("stdout", final=True)
