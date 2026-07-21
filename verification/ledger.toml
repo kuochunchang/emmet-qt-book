@@ -11,7 +11,7 @@ id = "appendix-a-w1-math-stat-foundations"
 batch = "W1"
 document = "manuscript/appendices/a-math-stat-foundations.md"
 chapter = "A. 數學與統計基礎"
-claim = "W1 第 1–3、5–20 章使用的單位、正負號、區間、比例／百分比／基點、Decimal、離散網格、守恆、比例配置、加權平均、有限樣本摘要、期望值、布林 gate 與 PIT 集合條件，在明示前提下形成可重現且不外推後續能力的基礎查表；固定 Decimal oracle 核對名義價值、費率、費用、加權均價與同比配置。"
+claim = "W1 第 1–3、5–20 章使用的單位、正負號、區間、比例／百分比／基點、Decimal、離散網格、守恆、比例配置、加權平均、有限樣本摘要、期望值、布林 gate 與 PIT 集合條件，在明示前提下形成可重現且不外推後續能力的基礎查表；固定 Decimal oracle 核對名義價值、費率、費用、加權均價與按比例配置。"
 content_state = "穩定概念"
 data_checksums = []
 data_checksum_note = "不適用：本附錄只使用頁內固定 Decimal 字串與穩定數學定義，不載入或保存外部市場資料。"
@@ -35,7 +35,7 @@ oracle_stdout_contains = [
   "appendix-a-math-oracle=PASS",
 ]
 result = "pass"
-observed = "固定字串 Decimal oracle 通過：名義價值 300.00150、5 bps 為 0.0005、費用 0.150000750、兩筆非等量成交的加權均價 19250、reservation 同比配置 200，輸出 appendix-a-math-oracle=PASS。"
+observed = "固定字串 Decimal oracle 通過：名義價值 300.00150、5 bps 為 0.0005、費用 0.150000750、兩筆非等量成交的加權均價 19250、reservation 按比例配置 200，輸出 appendix-a-math-oracle=PASS。"
 known_differences = [
   "本附錄只支持穩定概念與固定算式；不支持外部市場資料、即時費率、交易所規則、策略績效或可成交性宣稱。",
   "W1 尚未使用的進階統計推論不在本 claim；不得由有限樣本摘要外推母體或未來結果。",

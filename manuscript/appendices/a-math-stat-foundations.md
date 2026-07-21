@@ -282,7 +282,7 @@ PIT universe 的成員資格也是帶時點的集合條件：
 
 ## 一組可重現的 Decimal 核對
 
-以下固定數字同時核對名義價值、基點、加權平均與同比配置；它們是數學 oracle，
+以下固定數字同時核對名義價值、基點、加權平均與按比例配置；它們是數學 oracle，
 不是市場資料或交易建議：
 
 ```python
@@ -322,5 +322,5 @@ print("appendix-a-math-oracle=PASS")
 
 - 對照 tag／commit：`v0.3.0@c999965e5cc923281541409cda9502beb93b8a60`
 - 驗證命令：以 Python `Decimal` 執行本頁「一組可重現的 Decimal 核對」；repository 根目錄執行 `./scripts/book-check` 與 `git diff --check`
-- 通過結果：名義價值 `300.00150`、`5 bps = 0.0005`、費用 `0.150000750`、加權均價 `19250`、同比配置 `200`，輸出 `appendix-a-math-oracle=PASS`
+- 通過結果：名義價值 `300.00150`、`5 bps = 0.0005`、費用 `0.150000750`、加權均價 `19250`、按比例配置 `200`，輸出 `appendix-a-math-oracle=PASS`
 - 待處理差異：無；本頁只宣稱穩定數學概念與固定 Decimal oracle，不宣稱配套交易能力或外部市場事實
