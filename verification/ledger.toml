@@ -7,6 +7,47 @@ schema_version = 2
 W1 = "v0.3.0@c999965e5cc923281541409cda9502beb93b8a60"
 
 [[records]]
+id = "appendix-a-w1-math-stat-foundations"
+batch = "W1"
+document = "manuscript/appendices/a-math-stat-foundations.md"
+chapter = "A. 數學與統計基礎"
+claim = "W1 第 1–3、5–20 章使用的單位、正負號、區間、比例／百分比／基點、Decimal、離散網格、守恆、比例配置、加權平均、有限樣本摘要、期望值、布林 gate 與 PIT 集合條件，在明示前提下形成可重現且不外推後續能力的基礎查表；固定 Decimal oracle 核對名義價值、費率、費用、加權均價與按比例配置。"
+content_state = "穩定概念"
+data_checksums = []
+data_checksum_note = "不適用：本附錄只使用頁內固定 Decimal 字串與穩定數學定義，不載入或保存外部市場資料。"
+formal_entrypoints = []
+schemas = []
+interface_note = "不適用：本項是數學／統計基礎查表與標準庫 Decimal oracle，不呼叫 Emmet 產品入口、交易所端點或未發布能力。"
+evidence_refs = [
+  "book:manuscript/appendices/a-math-stat-foundations.md",
+  "book:manuscript/chapters/05-spot-trade-ledger.md",
+  "book:manuscript/chapters/06-costs-breakeven.md",
+  "book:manuscript/chapters/14-pit-universe-rules-era.md",
+  "book:manuscript/chapters/16-precise-values-valid-orders.md",
+  "book:manuscript/chapters/19-reservation-partial-fill-single-ledger.md",
+]
+verification_commands = [
+  "uv run python -c 'from decimal import Decimal as D; notional=D(\"20000.10\")*D(\"0.015\"); rate=D(\"5\")*D(\"0.0001\"); fee=notional*rate; weighted=(D(\"20000\")*D(\"0.01\")+D(\"19000\")*D(\"0.03\"))/D(\"0.04\"); allocated=D(\"800\")*D(\"0.01\")/D(\"0.04\"); assert notional==D(\"300.00150\") and rate==D(\"0.0005\") and fee==D(\"0.150000750\") and weighted==D(\"19250\") and allocated==D(\"200\"); print(\"appendix-a-math-oracle=PASS\")'",
+]
+executable = true
+oracle_exit_code = 0
+oracle_stdout_contains = [
+  "appendix-a-math-oracle=PASS",
+]
+result = "pass"
+observed = "固定字串 Decimal oracle 通過：名義價值 300.00150、5 bps 為 0.0005、費用 0.150000750、兩筆非等量成交的加權均價 19250、reservation 按比例配置 200，輸出 appendix-a-math-oracle=PASS。"
+known_differences = [
+  "本附錄只支持穩定概念與固定算式；不支持外部市場資料、即時費率、交易所規則、策略績效或可成交性宣稱。",
+  "W1 尚未使用的進階統計推論不在本 claim；不得由有限樣本摘要外推母體或未來結果。",
+]
+verified_on = "2026-07-21"
+revalidation_triggers = [
+  "附錄 A 的公式、前提、固定 Decimal 輸入／輸出或 PASS marker 改變",
+  "第 1–3、5–20 章對這些基礎概念的符號、單位、方向或 gate 語義改變",
+  "配套基線 tag／commit 或附錄 A 內容狀態改變",
+]
+
+[[records]]
 id = "ch20-v030-funding-liquidation-golden"
 batch = "W1"
 document = "manuscript/chapters/20-funding-liquidation-micro-ledger.md"
